@@ -1,0 +1,49 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: realty_erp_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: realty_erp
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: realty_erp_backend
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgrespassword@db:5432/realty_erp
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/:/app/
+    depends_on:
+      - db
+    restart: always
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: realty_erp_frontend
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/:/app/
+      # Exclude node_modules from being overwritten by the host
+      - /app/node_modules
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
