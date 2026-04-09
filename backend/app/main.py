@@ -45,3 +45,6 @@ async def tenant_middleware(request: Request, call_next):
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+from app.api.auth import router as auth_router
+app.include_router(auth_router)

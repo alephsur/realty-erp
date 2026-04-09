@@ -6,6 +6,7 @@ from sqlalchemy.orm import relationship
 from app.database import Base
 
 class RoleEnum(str, enum.Enum):
+    SUPER_ADMIN = "SUPER_ADMIN"
     ADMIN = "ADMIN"
     MANAGER = "MANAGER"
     AGENT = "AGENT"
@@ -16,6 +17,7 @@ class Tenant(Base):
     # We do not apply RLS to this table typically, as it defines the tenants
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     name = Column(String, unique=True, index=True, nullable=False)
+    plan = Column(String, default="basic", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     is_active = Column(Boolean, default=True)
 
@@ -26,9 +28,9 @@ class User(Base):
     __tablename__ = "users"
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
-    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
     email = Column(String, unique=True, index=True, nullable=False)
-    hashed_password = Column(String, nullable=False)
+    password_hash = Column(String, nullable=False)
     full_name = Column(String, nullable=False)
     role = Column(Enum(RoleEnum), default=RoleEnum.AGENT, nullable=False)
     is_active = Column(Boolean, default=True)

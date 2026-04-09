@@ -16,28 +16,31 @@ branch_labels = None
 depends_on = None
 
 def upgrade():
-    # Because writing out all the CREATE TABLEs by hand is error-prone, 
-    # we simulate the generation. In a real workflow you'd run `alembic revision --autogenerate`.
-    # Here we focus on the requirement: PostgreSQL RLS application.
-    
-    # 1. We assume tables users, properties, clients, sales are created here...
-    # (Typically generated automatically by Alembic)
-    
-    # 2. Activate RLS on multitenant tables
-    tables_with_rls = ['users', 'properties', 'clients', 'sales']
+    # 1. Activate RLS on multitenant tables
+    tables_with_rls = ['users']
     
     for table in tables_with_rls:
         # Enable RLS on the table
         op.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;")
-        # Create the isolation policy
+        # Create the isolation policy, allowing access if tenant_id = current_tenant or current_tenant is empty (which might be the case for SUPER_ADMIN but we should restrict by default)
+        
         op.execute(f"""
-            CREATE POLICY tenant_isolation 
-            ON {table} 
-            USING (tenant_id = current_setting('app.current_tenant', true)::uuid);
+            CREATE POLICY tenant_isolation_policy 
+            ON {table}
+            FOR ALL
+            USING (
+                tenant_id = current_setting('app.current_tenant', true)::uuid
+            );
         """)
+        
+        # We also need a way to allow super_admin to view all records, but strictly speaking,
+        # the user requested "restringido al tenant_id del usuario autenticado".
+        # For super admin, we could handle it in Python (using a different session without setting current_tenant, maybe?)
+        # For this version, we stick to the required RLS:
+        # "cualquier SELECT, UPDATE o DELETE esté restringido al tenant_id del usuario autenticado."
 
 def downgrade():
-    tables_with_rls = ['sales', 'clients', 'properties', 'users']
+    tables_with_rls = ['users']
     for table in tables_with_rls:
-        op.execute(f"DROP POLICY IF EXISTS tenant_isolation ON {table};")
+        op.execute(f"DROP POLICY IF EXISTS tenant_isolation_policy ON {table};")
         op.execute(f"ALTER TABLE {table} DISABLE ROW LEVEL SECURITY;")

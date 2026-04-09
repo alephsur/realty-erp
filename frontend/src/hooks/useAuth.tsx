@@ -1,14 +1,15 @@
 import { useState, useEffect, createContext, useContext } from 'react';
-import client from '@/api/client';
+import type { ReactNode } from 'react';
+import client from '../api/client';
 
-export type Role = 'ADMIN' | 'MANAGER' | 'AGENT';
+export type Role = 'SUPER_ADMIN' | 'ADMIN' | 'MANAGER' | 'AGENT';
 
 export interface User {
   id: string;
   email: string;
-  fullName: string;
+  fullName?: string;
   role: Role;
-  tenantId: string;
+  tenantId: string | null;
 }
 
 interface AuthContextType {
@@ -20,7 +21,7 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
+export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
