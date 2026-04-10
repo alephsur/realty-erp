@@ -1,6 +1,6 @@
 import uuid
 import enum
-from sqlalchemy import Column, String, Enum, DateTime, func, Boolean, ForeignKey
+from sqlalchemy import Column, String, Enum, DateTime, func, Boolean, ForeignKey, Float, Date
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -35,6 +35,12 @@ class User(Base):
     role = Column(Enum(RoleEnum), default=RoleEnum.AGENT, nullable=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Agent-specific fields
+    phone = Column(String, nullable=True)
+    license_number = Column(String, nullable=True)  # Nº de colegiado / licencia
+    commission_rate = Column(Float, nullable=True, default=0.0)  # % comisión por defecto del agente
+    hire_date = Column(Date, nullable=True)
 
     tenant = relationship("Tenant", back_populates="users")
     properties = relationship("Property", back_populates="agent")

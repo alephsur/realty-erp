@@ -3,8 +3,45 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.middleware import set_current_tenant_id_in_context, reset_tenant_id_in_context
 from app.auth.jwt import decode_access_token
 from jose import JWTError
+import logging
+import secrets
+from contextlib import asynccontextmanager
+from app.database import SessionLocal
+from app.models.auth import User, RoleEnum
+from app.core.security import get_password_hash
 
-app = FastAPI(title="Realty ERP Multi-tenant API")
+logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create superadmin if it doesn't exist
+    db = SessionLocal()
+    try:
+        superadmin = db.query(User).filter(User.role == RoleEnum.SUPER_ADMIN).first()
+        if not superadmin:
+            email = "admin@erp.com"
+            password = secrets.token_urlsafe(12)
+            hashed = get_password_hash(password)
+            new_superadmin = User(
+                email=email,
+                password_hash=hashed,
+                full_name="System Superadmin",
+                role=RoleEnum.SUPER_ADMIN
+            )
+            db.add(new_superadmin)
+            db.commit()
+            logger.warning("==================================================")
+            logger.warning("🚀 SUPERADMIN CREATED AUTOMATICALLY")
+            logger.warning(f"Email: {email}")
+            logger.warning(f"Password: {password}")
+            logger.warning("==================================================")
+    except Exception as e:
+        logger.error(f"Database might not be ready or migrations not applied yet. Skipping superadmin creation. Error: {e}")
+    finally:
+        db.close()
+    yield
+
+app = FastAPI(title="Realty ERP Multi-tenant API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -47,4 +84,6 @@ def health_check():
     return {"status": "ok"}
 
 from app.api.auth import router as auth_router
+from app.api.properties import router as properties_router
 app.include_router(auth_router)
+app.include_router(properties_router)
