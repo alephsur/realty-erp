@@ -752,3 +752,176 @@ def price_distribution(
         result.append({"range": label, "count": int(count), "low": low, "high": high})
 
     return result
+
+
+# ─────────────────────────────────────────────────────────
+# 11. AGENT EVOLUTION (monthly time-series per agent)
+# ─────────────────────────────────────────────────────────
+
+@router.get("/agent-evolution")
+def agent_evolution(
+    months: int = Query(12, ge=3, le=36, description="How many months back to look"),
+    agent_ids: Optional[str] = Query(
+        None,
+        description="Comma-separated list of agent UUIDs. Empty = all agents with activity."
+    ),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Monthly evolution per agent for the main KPIs:
+      - sales_count, sales_volume, agent_commission
+      - visits_total, visits_completed
+
+    Returns one entry per agent with a `monthly` array covering every
+    month in the requested window (missing months are filled with zeros).
+
+    Optional agent_ids filter (comma-separated UUIDs) narrows results.
+    """
+    require_manager(current_user)
+    tid = current_user.tenant_id
+    cutoff = datetime.utcnow() - relativedelta(months=months)
+
+    # ── Build the requested month list (fills gaps) ──────
+    now = datetime.utcnow()
+    all_periods: list[tuple[int, int]] = []
+    cursor = cutoff.replace(day=1)
+    while cursor <= now:
+        all_periods.append((cursor.year, cursor.month))
+        cursor += relativedelta(months=1)
+
+    # ── Resolve which agents to include ─────────────────
+    import uuid as _uuid
+
+    requested_ids: Optional[list] = None
+    if agent_ids and agent_ids.strip():
+        try:
+            requested_ids = [_uuid.UUID(aid.strip()) for aid in agent_ids.split(",") if aid.strip()]
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid UUID in agent_ids")
+
+    # All users who have at least one sale or visit in the window
+    sale_agent_q = (
+        db.query(Sale.agent_id)
+        .filter(Sale.tenant_id == tid, Sale.agent_id.isnot(None), Sale.sale_date >= cutoff)
+        .distinct()
+    )
+    visit_agent_q = (
+        db.query(Visit.agent_id)
+        .filter(Visit.tenant_id == tid, Visit.agent_id.isnot(None), Visit.scheduled_at >= cutoff)
+        .distinct()
+    )
+    active_ids = {r[0] for r in sale_agent_q.all()} | {r[0] for r in visit_agent_q.all()}
+
+    # Also include all active AGENT-role users even with no activity
+    roster_ids = {
+        u.id
+        for u in db.query(User).filter(
+            User.tenant_id == tid, User.role == RoleEnum.AGENT, User.is_active == True
+        ).all()
+    }
+    candidate_ids = active_ids | roster_ids
+
+    if requested_ids:
+        candidate_ids = {aid for aid in candidate_ids if aid in requested_ids}
+
+    if not candidate_ids:
+        return []
+
+    agents = db.query(User).filter(User.id.in_(list(candidate_ids))).all()
+    agent_map = {a.id: a.full_name for a in agents}
+
+    # ── Aggregate sales per (agent, year, month) ────────
+    sales_rows = (
+        db.query(
+            Sale.agent_id,
+            extract("year", Sale.sale_date).label("yr"),
+            extract("month", Sale.sale_date).label("mo"),
+            func.count(Sale.id).label("cnt"),
+            func.sum(Sale.sale_price).label("vol"),
+            func.sum(Sale.agent_commission).label("comm"),
+        )
+        .filter(
+            Sale.tenant_id == tid,
+            Sale.agent_id.in_(list(candidate_ids)),
+            Sale.sale_date >= cutoff,
+        )
+        .group_by(Sale.agent_id, "yr", "mo")
+        .all()
+    )
+
+    # ── Aggregate visits per (agent, year, month) ────────
+    visits_rows = (
+        db.query(
+            Visit.agent_id,
+            extract("year", Visit.scheduled_at).label("yr"),
+            extract("month", Visit.scheduled_at).label("mo"),
+            func.count(Visit.id).label("total"),
+            func.sum(
+                case((Visit.status == VisitStatus.COMPLETED, 1), else_=0)
+            ).label("completed"),
+        )
+        .filter(
+            Visit.tenant_id == tid,
+            Visit.agent_id.in_(list(candidate_ids)),
+            Visit.scheduled_at >= cutoff,
+        )
+        .group_by(Visit.agent_id, "yr", "mo")
+        .all()
+    )
+
+    # ── Index by (agent_id, year, month) ─────────────────
+    sales_idx: dict = {}
+    for r in sales_rows:
+        sales_idx[(r.agent_id, int(r.yr), int(r.mo))] = {
+            "sales_count": int(r.cnt),
+            "sales_volume": round(float(r.vol or 0), 2),
+            "agent_commission": round(float(r.comm or 0), 2),
+        }
+
+    visits_idx: dict = {}
+    for r in visits_rows:
+        visits_idx[(r.agent_id, int(r.yr), int(r.mo))] = {
+            "visits_total": int(r.total),
+            "visits_completed": int(r.completed),
+        }
+
+    # ── Build output per agent ────────────────────────────
+    result = []
+    for agent in agents:
+        monthly = []
+        for yr, mo in all_periods:
+            s = sales_idx.get((agent.id, yr, mo), {})
+            v = visits_idx.get((agent.id, yr, mo), {})
+            monthly.append({
+                "period": f"{yr}-{mo:02d}",
+                "year": yr,
+                "month": mo,
+                "sales_count": s.get("sales_count", 0),
+                "sales_volume": s.get("sales_volume", 0.0),
+                "agent_commission": s.get("agent_commission", 0.0),
+                "visits_total": v.get("visits_total", 0),
+                "visits_completed": v.get("visits_completed", 0),
+            })
+
+        # Properties currently assigned (point-in-time)
+        assigned_props = db.query(func.count(Property.id)).filter(
+            Property.tenant_id == tid,
+            Property.agent_id == agent.id,
+            Property.status.notin_([PropertyStatus.VENDIDA, PropertyStatus.RETIRADA]),
+        ).scalar() or 0
+
+        result.append({
+            "agent_id": str(agent.id),
+            "agent_name": agent.full_name,
+            "agent_email": agent.email,
+            "assigned_properties": int(assigned_props),
+            "monthly": monthly,
+        })
+
+    # Sort by total recent volume descending
+    result.sort(
+        key=lambda x: sum(m["sales_volume"] for m in x["monthly"]),
+        reverse=True,
+    )
+    return result

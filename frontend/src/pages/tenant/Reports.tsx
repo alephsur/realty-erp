@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   TrendingUp, TrendingDown, Minus, DollarSign, Building2, Users, Home,
   BarChart2, RefreshCw, CalendarDays, Trophy, Star, CheckCircle2, ArrowUpRight,
+  Activity, Filter,
 } from 'lucide-react';
 import apiClient from '../../api/client';
 
@@ -32,6 +33,16 @@ interface VisitAnalytics { period: string; SCHEDULED: number; COMPLETED: number;
 interface TopSale { id: string; property_title: string | null; agent_name: string | null; sale_price: number; agency_commission: number; sale_date: string | null; }
 interface PriceRange { range: string; count: number; }
 interface ClientAcquisition { period: string; Propietario: number; Demandante: number; total: number; }
+interface AgentMonthly {
+  period: string; year: number; month: number;
+  sales_count: number; sales_volume: number; agent_commission: number;
+  visits_total: number; visits_completed: number;
+}
+interface AgentEvolutionData {
+  agent_id: string; agent_name: string; agent_email: string;
+  assigned_properties: number;
+  monthly: AgentMonthly[];
+}
 
 // ─── Helpers ─────────────────────────────────────────────
 const fmt = (n: number) => n.toLocaleString('es-ES', { maximumFractionDigits: 0 });
@@ -285,6 +296,340 @@ function DonutSVG({ data, labelKey, valueKey }: {
   );
 }
 
+// ─── Agent colour palette (stable per index) ─────────────
+const AGENT_COLORS = [
+  '#6366f1','#10b981','#f59e0b','#f43f5e','#06b6d4',
+  '#8b5cf6','#fb923c','#14b8a6','#3b82f6','#ec4899',
+];
+
+// ─── Multi-line SVG chart ─────────────────────────────────
+interface LineSeries { label: string; color: string; values: number[]; }
+
+function MultiLineSVG({
+  periods, series, formatY = fmtEur, height = 220,
+}: {
+  periods: string[]; series: LineSeries[]; formatY?: (n: number) => string; height?: number;
+}) {
+  if (!periods.length || !series.length) {
+    return <div className="flex items-center justify-center h-40 text-sm text-slate-400">Sin datos para el período seleccionado</div>;
+  }
+
+  const W = 560; const H = height;
+  const pad = { t: 14, r: 80, b: 32, l: 56 };
+  const innerW = W - pad.l - pad.r;
+  const innerH = H - pad.t - pad.b;
+
+  const allVals = series.flatMap(s => s.values);
+  const maxVal = Math.max(...allVals, 1);
+  const xStep = periods.length > 1 ? innerW / (periods.length - 1) : innerW;
+  const scaleY = (v: number) => innerH - (v / maxVal) * innerH;
+
+  // Y ticks: 5 levels
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map(f => ({
+    v: maxVal * f,
+    y: scaleY(maxVal * f),
+  }));
+
+  // Show every Nth x label to avoid overlap
+  const xLabelStep = Math.max(1, Math.ceil(periods.length / 8));
+
+  return (
+    <div className="w-full overflow-x-auto">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ minWidth: 320 }}>
+        <defs>
+          {series.map((s, si) => (
+            <linearGradient key={si} id={`evo-grad-${si}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor={s.color} stopOpacity={0.15} />
+              <stop offset="90%" stopColor={s.color} stopOpacity={0} />
+            </linearGradient>
+          ))}
+        </defs>
+
+        {/* Y grid + labels */}
+        {yTicks.map((t, ti) => (
+          <g key={ti}>
+            <line
+              x1={pad.l} y1={pad.t + t.y}
+              x2={W - pad.r} y2={pad.t + t.y}
+              stroke="#f1f5f9" strokeWidth={1}
+            />
+            <text x={pad.l - 6} y={pad.t + t.y + 4} textAnchor="end" fontSize={9} fill="#94a3b8">
+              {t.v >= 1_000_000
+                ? `${(t.v / 1_000_000).toFixed(1)}M`
+                : t.v >= 1_000
+                ? `${(t.v / 1_000).toFixed(0)}K`
+                : t.v.toFixed(0)}
+            </text>
+          </g>
+        ))}
+
+        {/* Area fills */}
+        {series.map((s, si) => {
+          if (s.values.every(v => v === 0)) return null;
+          const pts = s.values.map((v, i) => ({
+            x: pad.l + i * xStep,
+            y: pad.t + scaleY(v),
+          }));
+          const linePath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+          const areaPath = linePath
+            + ` L${pts[pts.length - 1].x.toFixed(1)},${(pad.t + innerH).toFixed(1)}`
+            + ` L${pts[0].x.toFixed(1)},${(pad.t + innerH).toFixed(1)} Z`;
+          return (
+            <path key={`area-${si}`} d={areaPath} fill={`url(#evo-grad-${si})`} />
+          );
+        })}
+
+        {/* Lines + dots */}
+        {series.map((s, si) => {
+          if (s.values.every(v => v === 0)) return null;
+          const pts = s.values.map((v, i) => ({
+            x: pad.l + i * xStep,
+            y: pad.t + scaleY(v),
+            v,
+          }));
+          const linePath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+          return (
+            <g key={`line-${si}`}>
+              <path d={linePath} fill="none" stroke={s.color} strokeWidth={2.5}
+                strokeLinecap="round" strokeLinejoin="round" />
+              {pts.map((p, i) => (
+                <g key={i}>
+                  <circle cx={p.x} cy={p.y} r={4} fill={s.color} opacity={0.9} />
+                  <circle cx={p.x} cy={p.y} r={2} fill="white" />
+                  <title>{periods[i]} — {s.label}: {formatY(p.v)}</title>
+                </g>
+              ))}
+              {/* Inline label at line end */}
+              <text
+                x={pts[pts.length - 1].x + 6}
+                y={pts[pts.length - 1].y + 4}
+                fontSize={9} fill={s.color} fontWeight="600"
+              >
+                {s.label.split(' ')[0]}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* X axis labels */}
+        {periods.map((p, i) => i % xLabelStep === 0 && (
+          <text key={i} x={pad.l + i * xStep} y={H - 6}
+            textAnchor="middle" fontSize={9} fill="#94a3b8">
+            {p.slice(-5)}
+          </text>
+        ))}
+
+        {/* X axis line */}
+        <line x1={pad.l} y1={pad.t + innerH} x2={W - pad.r} y2={pad.t + innerH}
+          stroke="#e2e8f0" strokeWidth={1} />
+      </svg>
+    </div>
+  );
+}
+
+// ─── Agent Evolution Section ─────────────────────────────
+type EvoKpi = 'sales_volume' | 'sales_count' | 'agent_commission' | 'visits_completed' | 'visits_total';
+
+const KPI_TABS: { key: EvoKpi; label: string; format: (n: number) => string }[] = [
+  { key: 'sales_volume',      label: 'Volumen Ventas',    format: fmtEur },
+  { key: 'sales_count',       label: 'Nº Ventas',         format: n => String(n) },
+  { key: 'agent_commission',  label: 'Comisión Agente',   format: fmtEur },
+  { key: 'visits_completed',  label: 'Visitas Realizadas',format: n => String(n) },
+  { key: 'visits_total',      label: 'Total Visitas',     format: n => String(n) },
+];
+
+const MONTH_OPTIONS = [
+  { value: 6,  label: '6 meses' },
+  { value: 12, label: '12 meses' },
+  { value: 24, label: '24 meses' },
+];
+
+function AgentEvolutionSection({
+  data, loading, months, onMonthsChange,
+  selectedAgents, onSelectedAgentsChange, kpi, onKpiChange,
+}: {
+  data: AgentEvolutionData[];
+  loading: boolean;
+  months: number;
+  onMonthsChange: (m: number) => void;
+  selectedAgents: Set<string>;
+  onSelectedAgentsChange: (s: Set<string>) => void;
+  kpi: EvoKpi;
+  onKpiChange: (k: EvoKpi) => void;
+}) {
+  const kpiDef = KPI_TABS.find(k => k.key === kpi)!;
+
+  // Build periods from first agent (all have same periods)
+  const periods = data[0]?.monthly.map(m => m.period) ?? [];
+
+  // Build series only for selected agents
+  const activeSeries: LineSeries[] = data
+    .filter(a => selectedAgents.has(a.agent_id))
+    .map((a, i) => ({
+      label: a.agent_name,
+      color: AGENT_COLORS[data.indexOf(a) % AGENT_COLORS.length],
+      values: a.monthly.map(m => m[kpi]),
+    }));
+
+  const toggleAgent = (id: string) => {
+    const next = new Set(selectedAgents);
+    if (next.has(id)) {
+      if (next.size > 1) next.delete(id); // keep at least one
+    } else {
+      next.add(id);
+    }
+    onSelectedAgentsChange(next);
+  };
+
+  const selectAll = () => onSelectedAgentsChange(new Set(data.map(a => a.agent_id)));
+  const selectNone = () => onSelectedAgentsChange(new Set([data[0]?.agent_id].filter(Boolean)));
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 overflow-hidden">
+      {/* Header */}
+      <div className="px-6 py-5 border-b border-slate-100 bg-slate-50/50">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-xl bg-indigo-50 flex items-center justify-center">
+              <Activity className="h-5 w-5 text-indigo-600" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">Evolución de Agentes</h2>
+              <p className="text-xs text-slate-400">Seguimiento mensual de KPIs por agente</p>
+            </div>
+          </div>
+          {/* Window selector */}
+          <div className="flex items-center gap-2">
+            <CalendarDays className="w-4 h-4 text-slate-400" />
+            <div className="flex rounded-xl overflow-hidden ring-1 ring-slate-200">
+              {MONTH_OPTIONS.map(o => (
+                <button
+                  key={o.value}
+                  onClick={() => onMonthsChange(o.value)}
+                  className={`px-3 py-1.5 text-xs font-semibold transition-colors ${
+                    months === o.value
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-white text-slate-500 hover:bg-slate-50'
+                  }`}
+                >{o.label}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* KPI Tabs */}
+        <div className="mt-4 flex flex-wrap gap-2">
+          {KPI_TABS.map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => onKpiChange(tab.key)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                kpi === tab.key
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >{tab.label}</button>
+          ))}
+        </div>
+      </div>
+
+      <div className="p-6 flex flex-col lg:flex-row gap-6">
+        {/* Agent filter panel */}
+        <div className="w-full lg:w-56 flex-shrink-0">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+              <Filter className="w-3.5 h-3.5" /> Agentes
+            </div>
+            <div className="flex gap-2">
+              <button onClick={selectAll} className="text-[10px] text-indigo-600 hover:underline font-medium">Todos</button>
+              <span className="text-slate-300">·</span>
+              <button onClick={selectNone} className="text-[10px] text-slate-400 hover:underline font-medium">Solo 1</button>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            {data.map((agent, i) => {
+              const color = AGENT_COLORS[i % AGENT_COLORS.length];
+              const isSelected = selectedAgents.has(agent.agent_id);
+              const totalKpi = agent.monthly.reduce((s, m) => s + m[kpi], 0);
+              return (
+                <button
+                  key={agent.agent_id}
+                  onClick={() => toggleAgent(agent.agent_id)}
+                  className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left transition-all ${
+                    isSelected
+                      ? 'ring-2 bg-slate-50'
+                      : 'ring-1 ring-slate-100 opacity-40 hover:opacity-60'
+                  }`}
+                  style={{ ringColor: isSelected ? color : undefined }}
+                >
+                  <span
+                    className="h-2.5 w-2.5 rounded-full flex-shrink-0 transition-all"
+                    style={{ background: isSelected ? color : '#cbd5e1' }}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-slate-800 truncate">{agent.agent_name}</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      {kpiDef.format(totalKpi)} total · {agent.assigned_properties} props
+                    </p>
+                  </div>
+                  <div
+                    className="h-6 w-1 rounded-full flex-shrink-0"
+                    style={{ background: isSelected ? color : '#e2e8f0' }}
+                  />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Chart */}
+        <div className="flex-1 min-w-0">
+          {loading ? (
+            <div className="flex items-center justify-center h-52">
+              <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-indigo-600" />
+            </div>
+          ) : (
+            <>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
+                {kpiDef.label} — evolución mensual
+              </p>
+              <MultiLineSVG
+                periods={periods}
+                series={activeSeries}
+                formatY={kpiDef.format}
+                height={220}
+              />
+              {/* Summary stats for selected agents */}
+              {activeSeries.length > 0 && (
+                <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {activeSeries.slice(0, 4).map((s, i) => {
+                    const total = s.values.reduce((a, b) => a + b, 0);
+                    const peak = Math.max(...s.values);
+                    const peakIdx = s.values.indexOf(peak);
+                    return (
+                      <div key={i} className="bg-slate-50 rounded-xl p-3">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
+                          <span className="text-[10px] font-semibold text-slate-500 uppercase truncate">{s.label}</span>
+                        </div>
+                        <p className="text-sm font-bold text-slate-900">{kpiDef.format(total)}</p>
+                        <p className="text-[10px] text-slate-400 mt-0.5">
+                          Pico: {kpiDef.format(peak)} ({periods[peakIdx]?.slice(-5) ?? '—'})
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Component ──────────────────────────────────────
 export default function Reports() {
   const [period, setPeriod] = useState('this_year');
@@ -301,6 +646,15 @@ export default function Reports() {
   const [clients, setClients] = useState<ClientAcquisition[]>([]);
   const [topSales, setTopSales] = useState<TopSale[]>([]);
   const [priceRange, setPriceRange] = useState<PriceRange[]>([]);
+
+  // Agent evolution
+  const [agentEvolution, setAgentEvolution] = useState<AgentEvolutionData[]>([]);
+  const [evoMonths, setEvoMonths] = useState(12);
+  const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
+  const [evoKpi, setEvoKpi] = useState<
+    'sales_volume' | 'sales_count' | 'agent_commission' | 'visits_completed' | 'visits_total'
+  >('sales_volume');
+  const [evoLoading, setEvoLoading] = useState(false);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -320,7 +674,8 @@ export default function Reports() {
         ]);
       setKpi(kpiR.data);
       setSalesTrend(salesR.data);
-      setAgentPerf(agentR.data);
+      const perfData: AgentPerformance[] = agentR.data;
+      setAgentPerf(perfData);
       setPipeline(pipeR.data);
       setPropTypes(typeR.data);
       setCommissions(commR.data);
@@ -331,6 +686,22 @@ export default function Reports() {
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   }, [period, refreshKey]);
+
+  const fetchEvolution = useCallback(async () => {
+    setEvoLoading(true);
+    try {
+      const res = await apiClient.get(`/reports/agent-evolution?months=${evoMonths}`);
+      const data: AgentEvolutionData[] = res.data;
+      setAgentEvolution(data);
+      // Default: select all agents
+      setSelectedAgents(prev =>
+        prev.size === 0 ? new Set(data.map(a => a.agent_id)) : prev
+      );
+    } catch (e) { console.error(e); }
+    finally { setEvoLoading(false); }
+  }, [evoMonths, refreshKey]);
+
+  useEffect(() => { fetchEvolution(); }, [fetchEvolution]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
@@ -619,7 +990,19 @@ export default function Reports() {
         )}
       </div>
 
-      {/* ── Row 5: Top Sales + Business Metrics ── */}
+      {/* ── Row 5: Agent Evolution Charts ── */}
+      <AgentEvolutionSection
+        data={agentEvolution}
+        loading={evoLoading}
+        months={evoMonths}
+        onMonthsChange={setEvoMonths}
+        selectedAgents={selectedAgents}
+        onSelectedAgentsChange={setSelectedAgents}
+        kpi={evoKpi}
+        onKpiChange={setEvoKpi}
+      />
+
+      {/* ── Row 6: Top Sales + Business Metrics ── */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
 
         <Card>
