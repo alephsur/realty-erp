@@ -136,6 +136,9 @@ def get_client(client_id: str, db: Session = Depends(get_db), current_user: User
     client = db.query(Client).filter(Client.id == client_id, Client.tenant_id == current_user.tenant_id).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
+    # Agents can only view their own clients
+    if current_user.role == RoleEnum.AGENT and client.agent_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
     return serialize_client(client)
 
 

@@ -243,8 +243,18 @@ def agent_ranking(db: Session = Depends(get_db), current_user: User = Depends(ge
 def list_properties(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if not current_user.tenant_id:
         raise HTTPException(status_code=400, detail="User does not belong to a tenant")
-    
-    properties = db.query(Property).filter(Property.tenant_id == current_user.tenant_id).order_by(Property.created_at.desc()).all()
+
+    # Agents only see their assigned properties even on the main endpoint
+    if current_user.role == RoleEnum.AGENT:
+        properties = db.query(Property).filter(
+            Property.tenant_id == current_user.tenant_id,
+            Property.agent_id == current_user.id
+        ).order_by(Property.created_at.desc()).all()
+    else:
+        properties = db.query(Property).filter(
+            Property.tenant_id == current_user.tenant_id
+        ).order_by(Property.created_at.desc()).all()
+
     return [serialize_property(p) for p in properties]
 
 

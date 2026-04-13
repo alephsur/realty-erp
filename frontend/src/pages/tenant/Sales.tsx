@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Search, DollarSign, Home, User, Calendar, FileText } from 'lucide-react';
 import client from '../../api/client';
+import { useAuth } from '../../hooks/useAuth';
 
 interface SaleData {
   id: string;
@@ -23,6 +24,8 @@ interface SaleData {
 interface AgentOption { id: string; full_name: string; }
 
 export default function Sales() {
+  const { user } = useAuth();
+  const isManager = user?.role === 'ADMIN' || user?.role === 'MANAGER';
   const [sales, setSales] = useState<SaleData[]>([]);
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,7 +39,10 @@ export default function Sales() {
       setLoading(true);
       const [salesRes, agentsRes] = await Promise.all([
         client.get('/properties/sales/list'),
-        client.get('/auth/tenant/users').catch(() => ({ data: [] })),
+        // Only managers need the agents list for the filter dropdown
+        isManager
+          ? client.get('/auth/tenant/users').catch(() => ({ data: [] }))
+          : Promise.resolve({ data: [] }),
       ]);
       setSales(salesRes.data);
       setAgents(agentsRes.data.map((u: any) => ({ id: u.id, full_name: u.full_name })));
@@ -97,7 +103,7 @@ export default function Sales() {
               value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2 border-0 ring-1 ring-inset ring-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-inset focus:ring-indigo-600 bg-white" />
           </div>
-          {agents.length > 0 && (
+          {isManager && agents.length > 0 && (
             <select value={agentFilter} onChange={e => setAgentFilter(e.target.value)}
               className="rounded-lg border-0 py-2 px-3 text-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-indigo-600 font-medium">
               <option value="ALL">Todos los Agentes</option>

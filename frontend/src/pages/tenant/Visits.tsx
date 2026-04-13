@@ -70,12 +70,13 @@ export default function Visits() {
   const fetchData = async () => {
     try {
       setLoading(true);
+      const isAgent = user?.role === 'AGENT';
       const [visitsRes, statsRes, propsRes, clientsRes, agentsRes] = await Promise.all([
         client.get('/visits'),
         client.get('/visits/stats'),
-        client.get('/properties'),
+        isAgent ? client.get('/properties/my') : client.get('/properties'),
         client.get('/clients').catch(() => ({ data: [] })),
-        client.get('/auth/tenant/users').catch(() => ({ data: [] })),
+        isAgent ? Promise.resolve({ data: [] }) : client.get('/auth/tenant/users').catch(() => ({ data: [] })),
       ]);
       setVisits(visitsRes.data);
       setStats(statsRes.data);

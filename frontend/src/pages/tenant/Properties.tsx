@@ -89,7 +89,7 @@ export default function Properties() {
   const [assignAgent, setAssignAgent] = useState('');
   const [assignCommission, setAssignCommission] = useState('');
 
-  useEffect(() => { fetchProperties(); fetchAgents(); }, []);
+  useEffect(() => { fetchProperties(); if (isManager) fetchAgents(); }, []);
 
   const fetchProperties = async () => {
     try {

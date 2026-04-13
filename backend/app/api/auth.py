@@ -216,6 +216,12 @@ def accept_invite(data: AcceptInvite, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Invite token already used")
 
     user.password_hash = get_password_hash(data.new_password)
+    # Activate the user account — users are created with is_active=False
+    # until they explicitly set their password via this invite flow
+    user.is_active = True
+    db.commit()
+    # The invite link is now automatically invalidated: the new password_hash
+    # has different last 10 chars, so the pwd_ver in the token no longer matches
     return {"message": "Password updated successfully. You can now login."}
 
 # ==========================================

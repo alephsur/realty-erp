@@ -142,6 +142,9 @@ def get_visit(visit_id: str, db: Session = Depends(get_db), current_user: User =
     visit = db.query(Visit).filter(Visit.id == visit_id, Visit.tenant_id == current_user.tenant_id).first()
     if not visit:
         raise HTTPException(status_code=404, detail="Visit not found")
+    # Agents can only view their own visits
+    if current_user.role == RoleEnum.AGENT and visit.agent_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
     return serialize_visit(visit)
 
 

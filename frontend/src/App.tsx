@@ -31,19 +31,23 @@ function App() {
               <Route path="/superadmin" element={<SuperAdminDashboard />} />
             </Route>
 
-            {/* Tenant specific routes wrapped in TenantLayout */}
+            {/* Tenant routes — all authenticated tenant roles */}
             <Route element={<ProtectedRoute allowedRoles={['MANAGER', 'ADMIN', 'AGENT']} />}>
               <Route element={<TenantLayout />}>
                 <Route path="/dashboard" element={<Dashboard />} />
-                <Route path="/employees" element={<Employees />} />
                 <Route path="/properties" element={<Properties />} />
-                <Route path="/sales" element={<Sales />} />
                 <Route path="/clients" element={<Clients />} />
                 <Route path="/visits" element={<Visits />} />
-                <Route path="/reports" element={<Reports />} />
-                
-                {/* Redirect any base protected hit to dashboard for normal users */}
+                <Route path="/sales" element={<Sales />} />
                 <Route index element={<Navigate to="/dashboard" replace />} />
+              </Route>
+            </Route>
+
+            {/* Manager/Admin-only routes — agents are redirected to /unauthorized */}
+            <Route element={<ProtectedRoute allowedRoles={['MANAGER', 'ADMIN']} />}>
+              <Route element={<TenantLayout />}>
+                <Route path="/employees" element={<Employees />} />
+                <Route path="/reports" element={<Reports />} />
               </Route>
             </Route>
           </Route>
