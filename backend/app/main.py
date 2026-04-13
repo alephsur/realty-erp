@@ -87,7 +87,9 @@ from app.api.auth import router as auth_router
 from app.api.properties import router as properties_router
 from app.api.clients import router as clients_router
 from app.api.visits import router as visits_router
+from app.api.reports import router as reports_router
 app.include_router(auth_router)
 app.include_router(properties_router)
 app.include_router(clients_router)
 app.include_router(visits_router)
+app.include_router(reports_router)

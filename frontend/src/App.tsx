@@ -11,6 +11,7 @@ import Properties from './pages/tenant/Properties';
 import Sales from './pages/tenant/Sales';
 import Clients from './pages/tenant/Clients';
 import Visits from './pages/tenant/Visits';
+import Reports from './pages/tenant/Reports';
 
 const Unauthorized = () => <div className="flex justify-center items-center h-screen text-2xl font-bold text-slate-800">403 Unauthorized Access</div>;
 
@@ -39,6 +40,7 @@ function App() {
                 <Route path="/sales" element={<Sales />} />
                 <Route path="/clients" element={<Clients />} />
                 <Route path="/visits" element={<Visits />} />
+                <Route path="/reports" element={<Reports />} />
                 
                 {/* Redirect any base protected hit to dashboard for normal users */}
                 <Route index element={<Navigate to="/dashboard" replace />} />

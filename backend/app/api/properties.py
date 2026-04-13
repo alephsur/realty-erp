@@ -70,8 +70,9 @@ class BulkAssignRequest(BaseModel):
 
 class SellPropertyRequest(BaseModel):
     sale_price: float
-    agent_commission_rate: Optional[float] = None  # Override agent's default rate
     buyer_id: Optional[str] = None
+    agent_commission_rate: Optional[float] = None  # Override agent's default rate
+    agent_id: Optional[str] = None  # Override: explicitly assign the sale to this agent
     notes: Optional[str] = None
 
 
@@ -415,10 +416,16 @@ def sell_property(property_id: str, data: SellPropertyRequest, db: Session = Dep
     agent_commission = total_commission * (agent_rate / 100)
     agency_commission = total_commission - agent_commission
     
+    # Determine which agent gets credit for this sale:
+    # 1. Explicit override in the request body
+    # 2. Agent currently assigned to the property
+    # 3. The manager registering the sale (so it's never NULL)
+    sale_agent_id = data.agent_id or prop.agent_id or current_user.id
+
     sale = Sale(
         tenant_id=current_user.tenant_id,
         property_id=prop.id,
-        agent_id=prop.agent_id,
+        agent_id=sale_agent_id,
         buyer_id=data.buyer_id if data.buyer_id else None,
         sale_price=data.sale_price,
         total_commission=total_commission,
