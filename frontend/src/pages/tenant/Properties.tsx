@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Edit, Trash2, X, Save, Home, MapPin, User } from 'lucide-react';
+import { Plus, Search, Edit, Trash2, X, Home, MapPin, User, UserPlus, Check } from 'lucide-react';
 import client from '../../api/client';
+import { useAuth } from '../../hooks/useAuth';
 
 interface PropertyData {
   id: string;
@@ -21,6 +22,7 @@ interface PropertyData {
   owner_phone: string | null;
   owner_email: string | null;
   commission_rate: number;
+  agent_commission_rate: number | null;
   agent_id: string | null;
   agent_name: string | null;
   created_at: string | null;
@@ -52,10 +54,14 @@ const PROPERTY_TYPES = [
 
 const emptyForm = {
   title: '', description: '', property_type: 'PISO', price: '', address: '', city: '', postal_code: '', reference: '',
-  bedrooms: '0', bathrooms: '0', sqm: '0', owner_name: '', owner_phone: '', owner_email: '', commission_rate: '0', agent_id: '',
+  bedrooms: '0', bathrooms: '0', sqm: '0', owner_name: '', owner_phone: '', owner_email: '', commission_rate: '0',
+  agent_id: '', agent_commission_rate: '',
 };
 
 export default function Properties() {
+  const { user } = useAuth();
+  const isManager = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+
   const [properties, setProperties] = useState<PropertyData[]>([]);
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -72,10 +78,27 @@ export default function Properties() {
   const [sellPrice, setSellPrice] = useState('');
   const [sellNotes, setSellNotes] = useState('');
 
+  // Bulk assignment
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkAssign, setShowBulkAssign] = useState(false);
+  const [bulkAgent, setBulkAgent] = useState('');
+  const [bulkCommission, setBulkCommission] = useState('');
+
+  // Assign modal
+  const [assignModal, setAssignModal] = useState<string | null>(null);
+  const [assignAgent, setAssignAgent] = useState('');
+  const [assignCommission, setAssignCommission] = useState('');
+
   useEffect(() => { fetchProperties(); fetchAgents(); }, []);
 
   const fetchProperties = async () => {
-    try { setLoading(true); const r = await client.get('/properties'); setProperties(r.data); }
+    try {
+      setLoading(true);
+      // Agents see only their properties
+      const url = isManager ? '/properties' : '/properties/my';
+      const r = await client.get(url);
+      setProperties(r.data);
+    }
     catch (err) { console.error(err); }
     finally { setLoading(false); }
   };
@@ -95,6 +118,7 @@ export default function Properties() {
       reference: p.reference || '', bedrooms: String(p.bedrooms), bathrooms: String(p.bathrooms), sqm: String(p.sqm),
       owner_name: p.owner_name || '', owner_phone: p.owner_phone || '', owner_email: p.owner_email || '',
       commission_rate: String(p.commission_rate), agent_id: p.agent_id || '',
+      agent_commission_rate: p.agent_commission_rate != null ? String(p.agent_commission_rate) : '',
     });
     setShowForm(true);
     setError('');
@@ -111,6 +135,7 @@ export default function Properties() {
       sqm: parseFloat(form.sqm), owner_name: form.owner_name || null, owner_phone: form.owner_phone || null,
       owner_email: form.owner_email || null, commission_rate: parseFloat(form.commission_rate),
       agent_id: form.agent_id || null,
+      agent_commission_rate: form.agent_commission_rate ? parseFloat(form.agent_commission_rate) : null,
     };
     try {
       if (editingId) { await client.put(`/properties/${editingId}`, payload); }
@@ -143,8 +168,55 @@ export default function Properties() {
     } catch (err: any) { alert(err.response?.data?.detail || 'Error'); }
   };
 
+  // Assign single property
+  const openAssign = (p: PropertyData) => {
+    setAssignModal(p.id);
+    setAssignAgent(p.agent_id || '');
+    setAssignCommission(p.agent_commission_rate != null ? String(p.agent_commission_rate) : '');
+  };
+
+  const handleAssign = async () => {
+    if (!assignModal) return;
+    try {
+      await client.put(`/properties/${assignModal}/assign`, {
+        agent_id: assignAgent || null,
+        agent_commission_rate: assignCommission ? parseFloat(assignCommission) : null,
+      });
+      setAssignModal(null);
+      fetchProperties();
+    } catch (err: any) { alert(err.response?.data?.detail || 'Error'); }
+  };
+
+  // Bulk assign
+  const toggleSelect = (id: string) => {
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelectedIds(next);
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filtered.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filtered.map(p => p.id)));
+    }
+  };
+
+  const handleBulkAssign = async () => {
+    try {
+      await client.put('/properties/bulk-assign', {
+        property_ids: Array.from(selectedIds),
+        agent_id: bulkAgent || null,
+        agent_commission_rate: bulkCommission ? parseFloat(bulkCommission) : null,
+      });
+      setSelectedIds(new Set());
+      setShowBulkAssign(false);
+      setBulkAgent(''); setBulkCommission('');
+      fetchProperties();
+    } catch (err: any) { alert(err.response?.data?.detail || 'Error'); }
+  };
+
   const statusColor = (key: string | null) => STATUSES.find(s => s.key === key)?.color || 'bg-slate-100 text-slate-800';
-  const statusLabel = (val: string | null) => val || '—';
 
   const filtered = properties.filter(p => {
     const matchesSearch = p.title.toLowerCase().includes(searchQuery.toLowerCase()) || p.address.toLowerCase().includes(searchQuery.toLowerCase()) || (p.reference || '').toLowerCase().includes(searchQuery.toLowerCase());
@@ -159,12 +231,24 @@ export default function Properties() {
       <div className="flex sm:items-center justify-between flex-col sm:flex-row gap-4">
         <div>
           <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">Propiedades</h1>
-          <p className="text-slate-500 mt-1">Gestiona las propiedades, actualiza su estado y registra tus ventas.</p>
+          <p className="text-slate-500 mt-1">
+            {isManager ? 'Gestiona las propiedades, asigna agentes y registra ventas.' : 'Tus propiedades asignadas.'}
+          </p>
         </div>
-        <button onClick={openCreate}
-          className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-lg text-sm font-semibold shadow-sm transition-all hover:-translate-y-0.5">
-          <Plus className="h-5 w-5" /> <span>Nueva Propiedad</span>
-        </button>
+        <div className="flex gap-2">
+          {isManager && selectedIds.size > 0 && (
+            <button onClick={() => setShowBulkAssign(true)}
+              className="flex items-center space-x-2 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2.5 rounded-lg text-sm font-semibold shadow-sm transition-all">
+              <UserPlus className="h-5 w-5" /> <span>Asignar {selectedIds.size} seleccionadas</span>
+            </button>
+          )}
+          {isManager && (
+            <button onClick={openCreate}
+              className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-lg text-sm font-semibold shadow-sm transition-all hover:-translate-y-0.5">
+              <Plus className="h-5 w-5" /> <span>Nueva Propiedad</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Create/Edit Panel */}
@@ -208,12 +292,17 @@ export default function Properties() {
                 <input value={form.owner_name} onChange={e => setForm({...form, owner_name: e.target.value})} className={inputCls} /></div>
               <div><label className="block text-sm font-semibold text-slate-700 mb-1">Teléfono del Propietario</label>
                 <input value={form.owner_phone} onChange={e => setForm({...form, owner_phone: e.target.value})} className={inputCls} /></div>
-              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Comisión %</label>
+              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Comisión Propietario %</label>
                 <input type="number" step="0.1" min="0" value={form.commission_rate} onChange={e => setForm({...form, commission_rate: e.target.value})} className={inputCls} /></div>
               <div><label className="block text-sm font-semibold text-slate-700 mb-1">Agente Asignado</label>
                 <select value={form.agent_id} onChange={e => setForm({...form, agent_id: e.target.value})} className={inputCls}>
                   <option value="">— Sin Agente —</option>
                   {agents.map(a => <option key={a.id} value={a.id}>{a.full_name}</option>)}</select></div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Comisión Agente % <span className="text-xs text-slate-400">(override)</span></label>
+                <input type="number" step="0.1" min="0" value={form.agent_commission_rate} onChange={e => setForm({...form, agent_commission_rate: e.target.value})} className={inputCls}
+                  placeholder="Dejar vacío = tasa base del agente" /></div>
             </div>
             <div>
               <label className="block text-sm font-semibold text-slate-700 mb-1">Descripción</label>
@@ -247,6 +336,58 @@ export default function Properties() {
         </div>
       )}
 
+      {/* Assign Modal */}
+      {assignModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md mx-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-slate-900">Asignar Agente</h3>
+              <button onClick={() => setAssignModal(null)} className="text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="space-y-4">
+              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Agente</label>
+                <select value={assignAgent} onChange={e => setAssignAgent(e.target.value)} className={inputCls}>
+                  <option value="">— Sin Agente —</option>
+                  {agents.map(a => <option key={a.id} value={a.id}>{a.full_name}</option>)}
+                </select></div>
+              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Comisión del Agente % <span className="text-xs text-slate-400">(override)</span></label>
+                <input type="number" step="0.1" min="0" value={assignCommission} onChange={e => setAssignCommission(e.target.value)} className={inputCls}
+                  placeholder="Vacío = tasa base del agente" /></div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <button onClick={() => setAssignModal(null)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg">Cancelar</button>
+              <button onClick={handleAssign} className="px-4 py-2 text-sm font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-500">Guardar Asignación</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Assign Modal */}
+      {showBulkAssign && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md mx-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-slate-900">Asignación Masiva ({selectedIds.size} propiedades)</h3>
+              <button onClick={() => setShowBulkAssign(false)} className="text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="space-y-4">
+              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Agente</label>
+                <select value={bulkAgent} onChange={e => setBulkAgent(e.target.value)} className={inputCls}>
+                  <option value="">— Sin Agente (desasignar) —</option>
+                  {agents.map(a => <option key={a.id} value={a.id}>{a.full_name}</option>)}
+                </select></div>
+              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Comisión del Agente %</label>
+                <input type="number" step="0.1" min="0" value={bulkCommission} onChange={e => setBulkCommission(e.target.value)} className={inputCls}
+                  placeholder="Opcional" /></div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <button onClick={() => setShowBulkAssign(false)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg">Cancelar</button>
+              <button onClick={handleBulkAssign} className="px-4 py-2 text-sm font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800">Asignar Todas</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Filters */}
       <div className="flex flex-wrap gap-2">
         <button onClick={() => setStatusFilter('ALL')} className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${statusFilter === 'ALL' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>Todas</button>
@@ -271,6 +412,13 @@ export default function Properties() {
             <table className="min-w-full divide-y divide-slate-200">
               <thead>
                 <tr className="bg-slate-50">
+                  {isManager && (
+                    <th className="px-4 py-3 text-left">
+                      <input type="checkbox" checked={selectedIds.size === filtered.length && filtered.length > 0}
+                        onChange={toggleSelectAll}
+                        className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-600" />
+                    </th>
+                  )}
                   <th className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Propiedad</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Precio</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Tipo</th>
@@ -281,7 +429,14 @@ export default function Properties() {
               </thead>
               <tbody className="bg-white divide-y divide-slate-200">
                 {filtered.map(p => (
-                  <tr key={p.id} className="hover:bg-slate-50/50 transition-colors">
+                  <tr key={p.id} className={`hover:bg-slate-50/50 transition-colors ${selectedIds.has(p.id) ? 'bg-indigo-50/30' : ''}`}>
+                    {isManager && (
+                      <td className="px-4 py-4">
+                        <input type="checkbox" checked={selectedIds.has(p.id)}
+                          onChange={() => toggleSelect(p.id)}
+                          className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-600" />
+                      </td>
+                    )}
                     <td className="px-6 py-4">
                       <div className="flex items-start">
                         <div className="h-9 w-9 flex-shrink-0 rounded-lg bg-indigo-50 flex items-center justify-center">
@@ -297,23 +452,45 @@ export default function Properties() {
                     <td className="px-4 py-4 text-sm font-semibold text-slate-900">{p.price.toLocaleString('es-ES')} €</td>
                     <td className="px-4 py-4 text-sm text-slate-600">{PROPERTY_TYPES.find(t => t.key === p.property_type)?.label || p.property_type}</td>
                     <td className="px-4 py-4 text-sm text-slate-600">
-                      {p.agent_name ? <span className="flex items-center gap-1"><User className="w-3 h-3" />{p.agent_name}</span> : <span className="text-slate-400">—</span>}
+                      {p.agent_name ? (
+                        <div>
+                          <span className="flex items-center gap-1"><User className="w-3 h-3" />{p.agent_name}</span>
+                          {p.agent_commission_rate != null && (
+                            <span className="text-xs text-slate-400 mt-0.5 block">Com: {p.agent_commission_rate}%</span>
+                          )}
+                        </div>
+                      ) : <span className="text-slate-400">— Sin asignar</span>}
                     </td>
                     <td className="px-4 py-4">
-                      <select value={p.status_key || ''} onChange={e => handleStatusChange(p.id, e.target.value)}
-                        className={`rounded-full px-2.5 py-1 text-xs font-semibold border-0 cursor-pointer ${statusColor(p.status_key)}`}>
-                        {STATUSES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-                      </select>
+                      {isManager ? (
+                        <select value={p.status_key || ''} onChange={e => handleStatusChange(p.id, e.target.value)}
+                          className={`rounded-full px-2.5 py-1 text-xs font-semibold border-0 cursor-pointer ${statusColor(p.status_key)}`}>
+                          {STATUSES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+                        </select>
+                      ) : (
+                        <span className={`px-2.5 py-1 text-xs font-semibold rounded-full ${statusColor(p.status_key)}`}>
+                          {STATUSES.find(s => s.key === p.status_key)?.label || p.status || '—'}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-4 text-right">
                       <div className="flex items-center justify-end space-x-2">
-                        <button onClick={() => openEdit(p)} className="text-slate-400 hover:text-indigo-600 p-1.5 rounded-lg hover:bg-indigo-50" title="Editar"><Edit className="w-4 h-4" /></button>
-                        {p.status_key !== 'VENDIDA' && (
+                        {isManager && (
+                          <button onClick={() => openAssign(p)} className="text-slate-400 hover:text-blue-600 p-1.5 rounded-lg hover:bg-blue-50" title="Asignar Agente">
+                            <UserPlus className="w-4 h-4" />
+                          </button>
+                        )}
+                        {isManager && (
+                          <button onClick={() => openEdit(p)} className="text-slate-400 hover:text-indigo-600 p-1.5 rounded-lg hover:bg-indigo-50" title="Editar"><Edit className="w-4 h-4" /></button>
+                        )}
+                        {isManager && p.status_key !== 'VENDIDA' && (
                           <button onClick={() => { setSellModal(p.id); setSellPrice(String(p.price)); }} className="text-slate-400 hover:text-emerald-600 p-1.5 rounded-lg hover:bg-emerald-50" title="Registrar Venta">
                             <span className="text-xs font-bold">€</span>
                           </button>
                         )}
-                        <button onClick={() => handleDelete(p.id)} className="text-slate-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50" title="Eliminar"><Trash2 className="w-4 h-4" /></button>
+                        {isManager && (
+                          <button onClick={() => handleDelete(p.id)} className="text-slate-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50" title="Eliminar"><Trash2 className="w-4 h-4" /></button>
+                        )}
                       </div>
                     </td>
                   </tr>

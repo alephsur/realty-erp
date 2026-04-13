@@ -55,6 +55,7 @@ class Property(Base):
     
     # Commission
     commission_rate = Column(Float, default=0.0)  # % comisión pactada con el propietario
+    agent_commission_rate = Column(Float, nullable=True)  # Override: % comisión del agente para esta propiedad (si null, usa la tasa base del agente)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

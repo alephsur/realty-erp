@@ -7,8 +7,10 @@ import SuperAdminDashboard from './pages/SuperAdminDashboard';
 import TenantLayout from './components/TenantLayout';
 import Dashboard from './pages/tenant/Dashboard';
 import Employees from './pages/tenant/Employees';
-
 import Properties from './pages/tenant/Properties';
+import Sales from './pages/tenant/Sales';
+import Clients from './pages/tenant/Clients';
+import Visits from './pages/tenant/Visits';
 
 const Unauthorized = () => <div className="flex justify-center items-center h-screen text-2xl font-bold text-slate-800">403 Unauthorized Access</div>;
 
@@ -34,6 +36,9 @@ function App() {
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/employees" element={<Employees />} />
                 <Route path="/properties" element={<Properties />} />
+                <Route path="/sales" element={<Sales />} />
+                <Route path="/clients" element={<Clients />} />
+                <Route path="/visits" element={<Visits />} />
                 
                 {/* Redirect any base protected hit to dashboard for normal users */}
                 <Route index element={<Navigate to="/dashboard" replace />} />

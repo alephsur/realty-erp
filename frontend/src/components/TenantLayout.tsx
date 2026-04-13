@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, Users, Building, LogOut, Menu } from 'lucide-react';
+import { LayoutDashboard, Users, Building, LogOut, Menu, DollarSign, UserCircle, CalendarDays } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useState } from 'react';
 
@@ -7,11 +7,16 @@ export default function TenantLayout() {
   const { user, logout } = useAuth();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
+  const isManager = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+
   const navigation = [
-    { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-    { name: 'Empleados', href: '/employees', icon: Users },
-    { name: 'Propiedades', href: '/properties', icon: Building },
-  ];
+    { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, show: true },
+    { name: 'Propiedades', href: '/properties', icon: Building, show: true },
+    { name: 'Clientes', href: '/clients', icon: UserCircle, show: true },
+    { name: 'Visitas', href: '/visits', icon: CalendarDays, show: true },
+    { name: 'Ventas', href: '/sales', icon: DollarSign, show: true },
+    { name: 'Empleados', href: '/employees', icon: Users, show: isManager },
+  ].filter(item => item.show);
 
   return (
     <div className="flex bg-slate-50 min-h-screen">

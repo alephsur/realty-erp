@@ -11,6 +11,7 @@ class Sale(Base):
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     property_id = Column(UUID(as_uuid=True), ForeignKey("properties.id", ondelete="RESTRICT"), nullable=False)
     agent_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    buyer_id = Column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="SET NULL"), nullable=True)
     
     sale_price = Column(Float, nullable=False)
     
@@ -26,3 +27,4 @@ class Sale(Base):
     
     property = relationship("Property", back_populates="sales")
     agent = relationship("User", foreign_keys=[agent_id])
+    buyer = relationship("Client", foreign_keys=[buyer_id])
