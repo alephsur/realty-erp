@@ -1,4 +1,30 @@
-import { useState, useEffect, createContext, useContext } from 'react';
+/**
+ * Auth context — cookie-based session management.
+ *
+ * Token storage strategy
+ * ----------------------
+ * The JWT is kept exclusively in an httpOnly cookie managed by the
+ * backend.  This file never reads or writes `localStorage` for auth
+ * purposes, eliminating the XSS-based token theft vector.
+ *
+ * Session rehidration
+ * -------------------
+ * On mount, AuthProvider calls GET /auth/me.  If the httpOnly cookie is
+ * still valid the backend returns the user profile; otherwise it returns
+ * 401 and the provider leaves `user` as null (redirecting to login).
+ *
+ * Logout
+ * ------
+ * `logout()` calls POST /auth/logout so the backend can expire the
+ * httpOnly cookie (JS cannot delete it directly).
+ */
+import {
+  useState,
+  useEffect,
+  createContext,
+  useContext,
+  useCallback,
+} from 'react';
 import type { ReactNode } from 'react';
 import client from '../api/client';
 
@@ -10,13 +36,16 @@ export interface User {
   fullName?: string;
   role: Role;
   tenantId: string | null;
+  mustChangePassword?: boolean;
 }
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (token: string, userData: User) => void;
-  logout: () => void;
+  /** Call after a successful login to persist the user profile in context. */
+  login: (userData: User) => void;
+  /** Expires the server-side cookie and clears local state. */
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -25,33 +54,51 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // On mount: try to rehidrate from the server via /auth/me.
+  // This works as long as the httpOnly cookie is still valid.
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      // Usually you would query /me to validate the token and get user profile
-      client.get('/health') // using health as dummy until /me is created
-        .then(() => {
-          // Mock data for scaffolding purposes, normally fetched
-          const storedUser = localStorage.getItem('user');
-          if (storedUser) setUser(JSON.parse(storedUser));
-        })
-        .finally(() => setLoading(false));
-    } else {
-      setLoading(false);
-    }
+    client
+      .get<{
+        id: string;
+        email: string;
+        full_name: string;
+        role: Role;
+        tenant_id: string | null;
+        must_change_password: boolean;
+      }>('/auth/me')
+      .then(({ data }) => {
+        setUser({
+          id: data.id,
+          email: data.email,
+          fullName: data.full_name,
+          role: data.role,
+          tenantId: data.tenant_id,
+          mustChangePassword: data.must_change_password,
+        });
+      })
+      .catch(() => {
+        // 401 means no valid session — stay logged out
+        setUser(null);
+      })
+      .finally(() => setLoading(false));
   }, []);
 
-  const login = (token: string, userData: User) => {
-    localStorage.setItem('token', token);
-    localStorage.setItem('user', JSON.stringify(userData));
+  const login = useCallback((userData: User) => {
+    // The JWT cookie is already set by the backend response.
+    // We only need to store the user profile in React state.
     setUser(userData);
-  };
+  }, []);
 
-  const logout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    setUser(null);
-  };
+  const logout = useCallback(async () => {
+    try {
+      // Ask the backend to expire the httpOnly cookie.
+      await client.post('/auth/logout');
+    } catch {
+      // Even if the request fails, clear local state.
+    } finally {
+      setUser(null);
+    }
+  }, []);
 
   return (
     <AuthContext.Provider value={{ user, loading, login, logout }}>

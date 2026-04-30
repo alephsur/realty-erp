@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import client from '../api/client';
 import { Building2, UserPlus, Copy, Check, LogOut, ShieldAlert, Mail, Edit, Trash2, X, Save, Users, ToggleLeft, ToggleRight, ChevronDown, ChevronRight, Send } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
@@ -22,6 +23,7 @@ interface TenantUser {
 
 export default function SuperAdminDashboard() {
   const { logout } = useAuth();
+  const navigate = useNavigate();
   const [tenants, setTenants] = useState<TenantData[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -148,7 +150,7 @@ export default function SuperAdminDashboard() {
               </div>
               <span className="text-xl font-bold tracking-tight text-slate-900">SuperAdmin</span>
             </div>
-            <button onClick={logout} className="flex items-center text-sm font-medium text-slate-500 hover:text-slate-900 transition-colors">
+            <button onClick={() => logout().then(() => navigate('/login'))} className="flex items-center text-sm font-medium text-slate-500 hover:text-slate-900 transition-colors">
               <LogOut className="w-4 h-4 mr-2" /> Cerrar sesión
             </button>
           </div>

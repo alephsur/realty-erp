@@ -34,6 +34,7 @@ class User(Base):
     full_name = Column(String, nullable=False)
     role = Column(Enum(RoleEnum), default=RoleEnum.AGENT, nullable=False)
     is_active = Column(Boolean, default=True)
+    must_change_password = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Agent-specific fields

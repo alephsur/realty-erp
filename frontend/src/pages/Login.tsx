@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import client from '../api/client';
 import { useAuth } from '../hooks/useAuth';
+import type { User, Role } from '../hooks/useAuth';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -17,13 +18,38 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const response = await client.post('/auth/login', { email, password });
-      login(response.data.access_token, response.data.user);
-      
-      if (response.data.user.role === 'SUPER_ADMIN') {
+      const response = await client.post<{
+        must_change_password: boolean;
+        user: {
+          id: string;
+          email: string;
+          full_name: string;
+          role: Role;
+          tenant_id: string | null;
+        };
+      }>('/auth/login', { email, password });
+
+      const { user: raw, must_change_password } = response.data;
+
+      const userData: User = {
+        id: raw.id,
+        email: raw.email,
+        fullName: raw.full_name,
+        role: raw.role,
+        tenantId: raw.tenant_id,
+        mustChangePassword: must_change_password,
+      };
+
+      // The httpOnly JWT cookie is already set by the backend.
+      // We only persist the profile in React context.
+      login(userData);
+
+      if (must_change_password) {
+        navigate('/change-password');
+      } else if (raw.role === 'SUPER_ADMIN') {
         navigate('/superadmin');
       } else {
-        navigate('/dashboard'); // Redirect to tenant dashboard
+        navigate('/dashboard');
       }
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Ocurrió un error durante el inicio de sesión');
@@ -42,7 +68,9 @@ export default function Login() {
           {error && <div className="p-3 text-sm text-red-500 bg-red-50 rounded">{error}</div>}
           <div className="space-y-4 rounded-md shadow-sm">
             <div>
-              <label className="block text-sm font-medium text-gray-700" htmlFor="email-address">Correo electrónico</label>
+              <label className="block text-sm font-medium text-gray-700" htmlFor="email-address">
+                Correo electrónico
+              </label>
               <input
                 id="email-address"
                 name="email"
@@ -56,7 +84,9 @@ export default function Login() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700" htmlFor="password">Contraseña</label>
+              <label className="block text-sm font-medium text-gray-700" htmlFor="password">
+                Contraseña
+              </label>
               <input
                 id="password"
                 name="password"

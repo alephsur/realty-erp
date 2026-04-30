@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel
 from typing import Optional, List
 import logging
@@ -8,13 +8,14 @@ from app.database import get_db
 from app.models.auth import User, RoleEnum
 from app.models.crm import Client, ClientType, ClientPropertyInterest
 from app.api.dependencies import get_current_user
+from app.schemas import ClientRead
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
 # ==========================================
-# SCHEMAS
+# SCHEMAS (write / mutation only)
 # ==========================================
 
 class ClientCreate(BaseModel):
@@ -55,41 +56,15 @@ class PropertyInterestCreate(BaseModel):
 
 
 # ==========================================
-# HELPER
+# HELPER: eager-load options for Client queries
 # ==========================================
 
-def serialize_client(c: Client) -> dict:
-    return {
-        "id": str(c.id),
-        "first_name": c.first_name,
-        "last_name": c.last_name,
-        "full_name": f"{c.first_name} {c.last_name}",
-        "email": c.email,
-        "phone": c.phone,
-        "client_type": c.client_type.value if c.client_type else None,
-        "client_type_key": c.client_type.name if c.client_type else None,
-        "agent_id": str(c.agent_id) if c.agent_id else None,
-        "agent_name": c.agent.full_name if c.agent else None,
-        "dni": c.dni,
-        "address": c.address,
-        "budget_min": c.budget_min,
-        "budget_max": c.budget_max,
-        "desired_zones": c.desired_zones,
-        "desired_type": c.desired_type,
-        "notes": c.notes,
-        "is_active": c.is_active,
-        "created_at": c.created_at.isoformat() if c.created_at else None,
-        "property_interests": [
-            {
-                "id": str(pi.id),
-                "property_id": str(pi.property_id),
-                "property_title": pi.property.title if pi.property else None,
-                "interest_level": pi.interest_level,
-                "notes": pi.notes,
-            }
-            for pi in (c.property_interests or [])
-        ],
-    }
+def _client_options():
+    """joinedload chain that prevents all N+1 on Client read paths."""
+    return [
+        joinedload(Client.agent),
+        joinedload(Client.property_interests).joinedload(ClientPropertyInterest.property),
+    ]
 
 
 # ==========================================
@@ -101,57 +76,99 @@ def list_clients(
     client_type: Optional[str] = Query(None),
     agent_id: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     if not current_user.tenant_id:
         raise HTTPException(status_code=400, detail="User does not belong to a tenant")
-    
-    query = db.query(Client).filter(Client.tenant_id == current_user.tenant_id)
-    
-    # Agents only see their own clients
+
+    query = (
+        db.query(Client)
+        .options(*_client_options())
+        .filter(Client.tenant_id == current_user.tenant_id)
+    )
+
     if current_user.role == RoleEnum.AGENT:
         query = query.filter(Client.agent_id == current_user.id)
     elif agent_id:
         query = query.filter(Client.agent_id == agent_id)
-    
-    if client_type:
+
+    if client_type and client_type != "ALL":
         query = query.filter(Client.client_type == client_type)
-    
+
     if search:
-        search_term = f"%{search}%"
+        term = f"%{search}%"
         query = query.filter(
-            (Client.first_name.ilike(search_term)) |
-            (Client.last_name.ilike(search_term)) |
-            (Client.email.ilike(search_term)) |
-            (Client.phone.ilike(search_term))
+            Client.first_name.ilike(term) |
+            Client.last_name.ilike(term) |
+            Client.email.ilike(term) |
+            Client.phone.ilike(term)
         )
-    
-    clients = query.order_by(Client.created_at.desc()).all()
-    return [serialize_client(c) for c in clients]
+
+    total = query.count()
+    pages = max(1, -(-total // limit))
+    items = query.order_by(Client.created_at.desc()).offset((page - 1) * limit).limit(limit).all()
+
+    return {
+        "items": [ClientRead.model_validate(c) for c in items],
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": pages,
+    }
 
 
-@router.get("/{client_id}")
-def get_client(client_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    client = db.query(Client).filter(Client.id == client_id, Client.tenant_id == current_user.tenant_id).first()
+@router.get("/{client_id}/matching-properties")
+def matching_properties(
+    client_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return active properties that match this buyer client's preferences."""
+    client = (
+        db.query(Client)
+        .options(joinedload(Client.agent))
+        .filter(Client.id == client_id, Client.tenant_id == current_user.tenant_id)
+        .first()
+    )
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
-    # Agents can only view their own clients
     if current_user.role == RoleEnum.AGENT and client.agent_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
-    return serialize_client(client)
+    if client.client_type != ClientType.BUYER:
+        raise HTTPException(status_code=400, detail="Only buyer clients have property matches")
+
+    from app.core.matching import find_matching_properties
+    matches = find_matching_properties(db, client)
+    return {"client_id": client_id, "total_matches": len(matches), "matches": matches}
+
+
+@router.get("/{client_id}", response_model=ClientRead)
+def get_client(client_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    client = (
+        db.query(Client)
+        .options(*_client_options())
+        .filter(Client.id == client_id, Client.tenant_id == current_user.tenant_id)
+        .first()
+    )
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    if current_user.role == RoleEnum.AGENT and client.agent_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+    return client
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_client(data: ClientCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if not current_user.tenant_id:
         raise HTTPException(status_code=400, detail="User does not belong to a tenant")
-    
-    # If agent, auto-assign to self
+
     effective_agent_id = data.agent_id
     if current_user.role == RoleEnum.AGENT:
         effective_agent_id = str(current_user.id)
-    
+
     new_client = Client(
         tenant_id=current_user.tenant_id,
         agent_id=effective_agent_id if effective_agent_id else None,
@@ -171,6 +188,29 @@ def create_client(data: ClientCreate, db: Session = Depends(get_db), current_use
     db.add(new_client)
     db.commit()
     db.refresh(new_client)
+
+    # Notify about matching properties for buyer clients (best-effort)
+    if data.client_type == ClientType.BUYER:
+        try:
+            from app.core.matching import find_matching_properties
+            from app.api.notifications import push, push_to_managers
+
+            matches = find_matching_properties(db, new_client)
+            if matches:
+                full_name = f"{new_client.first_name} {new_client.last_name}"
+                body = f"El comprador '{full_name}' tiene {len(matches)} propiedad(es) compatible(s) en cartera."
+                if effective_agent_id:
+                    push(db, user_id=effective_agent_id, tenant_id=current_user.tenant_id,
+                         type="MATCH_FOUND", title="Propiedades compatibles encontradas",
+                         body=body, entity_type="client", entity_id=str(new_client.id))
+                else:
+                    push_to_managers(db, tenant_id=current_user.tenant_id,
+                                     type="MATCH_FOUND", title="Propiedades compatibles encontradas",
+                                     body=body, entity_type="client", entity_id=str(new_client.id))
+                db.commit()
+        except Exception:
+            logger.warning("Failed to create match notification for new client", exc_info=True)
+
     return {"message": "Client created", "id": str(new_client.id)}
 
 
@@ -179,15 +219,14 @@ def update_client(client_id: str, data: ClientUpdate, db: Session = Depends(get_
     client = db.query(Client).filter(Client.id == client_id, Client.tenant_id == current_user.tenant_id).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
-    
-    # Agents can only edit their own clients
+
     if current_user.role == RoleEnum.AGENT and client.agent_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
-    
+
     update_data = data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(client, key, value)
-    
+
     db.commit()
     return {"message": "Client updated"}
 
@@ -196,11 +235,11 @@ def update_client(client_id: str, data: ClientUpdate, db: Session = Depends(get_
 def delete_client(client_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if current_user.role not in [RoleEnum.ADMIN, RoleEnum.MANAGER]:
         raise HTTPException(status_code=403, detail="Not enough permissions")
-    
+
     client = db.query(Client).filter(Client.id == client_id, Client.tenant_id == current_user.tenant_id).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
-    
+
     db.delete(client)
     db.commit()
     return {"message": "Client deleted"}
@@ -215,7 +254,7 @@ def add_property_interest(client_id: str, data: PropertyInterestCreate, db: Sess
     client = db.query(Client).filter(Client.id == client_id, Client.tenant_id == current_user.tenant_id).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
-    
+
     interest = ClientPropertyInterest(
         tenant_id=current_user.tenant_id,
         client_id=client_id,
@@ -237,7 +276,7 @@ def remove_property_interest(client_id: str, interest_id: str, db: Session = Dep
     ).first()
     if not interest:
         raise HTTPException(status_code=404, detail="Interest record not found")
-    
+
     db.delete(interest)
     db.commit()
     return {"message": "Property interest removed"}

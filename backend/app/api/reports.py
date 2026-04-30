@@ -5,6 +5,7 @@ All endpoints are MANAGER/ADMIN only and tenant-scoped.
 Uses raw SQLAlchemy aggregate queries — no ORM lazy loading — for performance.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case, extract, cast, Float, Integer, and_, text
 from sqlalchemy.dialects.postgresql import UUID
@@ -20,6 +21,7 @@ from app.models.transactions import Sale
 from app.models.crm import Client, ClientType
 from app.models.visits import Visit, VisitStatus
 from app.api.dependencies import get_current_user
+from app.schemas import TopSaleRead
 
 logger = logging.getLogger(__name__)
 
@@ -675,7 +677,7 @@ def client_acquisition(
 # 9. TOP PERFORMING PROPERTIES (by sale price)
 # ─────────────────────────────────────────────────────────
 
-@router.get("/top-sales")
+@router.get("/top-sales", response_model=list[TopSaleRead])
 def top_sales(
     period: str = Query("this_year"),
     limit: int = Query(10, ge=1, le=50),
@@ -684,34 +686,24 @@ def top_sales(
 ):
     """
     Top N sales sorted by sale_price descending.
+    Eagerly loads property, agent and buyer to avoid N+1 queries.
     """
     require_manager(current_user)
     tid = current_user.tenant_id
     start, end = _parse_period(period)
 
-    sales = (
+    return (
         db.query(Sale)
+        .options(
+            joinedload(Sale.property),
+            joinedload(Sale.agent),
+            joinedload(Sale.buyer),
+        )
         .filter(Sale.tenant_id == tid, Sale.sale_date >= start, Sale.sale_date <= end)
         .order_by(Sale.sale_price.desc())
         .limit(limit)
         .all()
     )
-
-    return [
-        {
-            "id": str(s.id),
-            "property_title": s.property.title if s.property else None,
-            "property_reference": s.property.reference if s.property else None,
-            "agent_name": s.agent.full_name if s.agent else None,
-            "buyer_name": f"{s.buyer.first_name} {s.buyer.last_name}" if s.buyer else None,
-            "sale_price": s.sale_price,
-            "total_commission": round(s.total_commission, 2),
-            "agency_commission": round(s.agency_commission, 2),
-            "agent_commission": round(s.agent_commission, 2),
-            "sale_date": s.sale_date.isoformat() if s.sale_date else None,
-        }
-        for s in sales
-    ]
 
 
 # ─────────────────────────────────────────────────────────

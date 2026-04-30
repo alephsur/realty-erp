@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Search, DollarSign, Home, User, Calendar, FileText } from 'lucide-react';
 import client from '../../api/client';
 import { useAuth } from '../../hooks/useAuth';
+import Pagination from '../../components/Pagination';
 
 interface SaleData {
   id: string;
@@ -23,45 +24,60 @@ interface SaleData {
 
 interface AgentOption { id: string; full_name: string; }
 
+const LIMIT = 25;
+
 export default function Sales() {
   const { user } = useAuth();
   const isManager = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+
   const [sales, setSales] = useState<SaleData[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pages, setPages] = useState(1);
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [agentFilter, setAgentFilter] = useState('ALL');
 
-  useEffect(() => { fetchData(); }, []);
-
-  const fetchData = async () => {
+  const fetchSales = async (p = page, agentId = agentFilter) => {
     try {
       setLoading(true);
-      const [salesRes, agentsRes] = await Promise.all([
-        client.get('/properties/sales/list'),
-        // Only managers need the agents list for the filter dropdown
-        isManager
-          ? client.get('/auth/tenant/users').catch(() => ({ data: [] }))
-          : Promise.resolve({ data: [] }),
-      ]);
-      setSales(salesRes.data);
-      setAgents(agentsRes.data.map((u: any) => ({ id: u.id, full_name: u.full_name })));
+      const params: Record<string, any> = { page: p, limit: LIMIT };
+      if (agentId !== 'ALL') params.agent_id = agentId;
+      const r = await client.get('/properties/sales/list', { params });
+      setSales(r.data.items);
+      setTotal(r.data.total);
+      setPages(r.data.pages);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
   };
 
+  useEffect(() => {
+    fetchSales(page, agentFilter);
+  }, [page, agentFilter]);
+
+  useEffect(() => {
+    if (isManager) {
+      client.get('/auth/tenant/users').catch(() => ({ data: [] })).then(r => {
+        setSales(prev => prev); // keep existing
+        setAgents(r.data.map((u: any) => ({ id: u.id, full_name: u.full_name })));
+      });
+    }
+  }, [isManager]);
+
+  // Client-side search on current page
   const filtered = sales.filter(s => {
-    const matchesSearch =
-      (s.property_title || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (s.property_reference || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (s.agent_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (s.buyer_name || '').toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesAgent = agentFilter === 'ALL' || s.agent_id === agentFilter;
-    return matchesSearch && matchesAgent;
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      (s.property_title || '').toLowerCase().includes(q) ||
+      (s.property_reference || '').toLowerCase().includes(q) ||
+      (s.agent_name || '').toLowerCase().includes(q) ||
+      (s.buyer_name || '').toLowerCase().includes(q)
+    );
   });
 
   const totalVolume = filtered.reduce((sum, s) => sum + s.sale_price, 0);
-  const totalCommission = filtered.reduce((sum, s) => sum + s.total_commission, 0);
   const totalAgentComm = filtered.reduce((sum, s) => sum + s.agent_commission, 0);
   const totalAgencyComm = filtered.reduce((sum, s) => sum + s.agency_commission, 0);
 
@@ -73,14 +89,14 @@ export default function Sales() {
       </div>
 
       {/* Summary Cards */}
-      {!loading && filtered.length > 0 && (
+      {!loading && total > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="bg-white rounded-xl p-4 ring-1 ring-slate-900/5 shadow-sm">
             <p className="text-xs font-semibold text-slate-500 uppercase">Total Ventas</p>
-            <p className="text-2xl font-bold text-slate-900 mt-1">{filtered.length}</p>
+            <p className="text-2xl font-bold text-slate-900 mt-1">{total}</p>
           </div>
           <div className="bg-white rounded-xl p-4 ring-1 ring-slate-900/5 shadow-sm">
-            <p className="text-xs font-semibold text-slate-500 uppercase">Volumen Total</p>
+            <p className="text-xs font-semibold text-slate-500 uppercase">Volumen (pág.)</p>
             <p className="text-2xl font-bold text-slate-900 mt-1">{totalVolume.toLocaleString('es-ES')} €</p>
           </div>
           <div className="bg-white rounded-xl p-4 ring-1 ring-slate-900/5 shadow-sm">
@@ -104,7 +120,7 @@ export default function Sales() {
               className="w-full pl-10 pr-4 py-2 border-0 ring-1 ring-inset ring-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-inset focus:ring-indigo-600 bg-white" />
           </div>
           {isManager && agents.length > 0 && (
-            <select value={agentFilter} onChange={e => setAgentFilter(e.target.value)}
+            <select value={agentFilter} onChange={e => { setAgentFilter(e.target.value); setPage(1); }}
               className="rounded-lg border-0 py-2 px-3 text-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-indigo-600 font-medium">
               <option value="ALL">Todos los Agentes</option>
               {agents.map(a => <option key={a.id} value={a.id}>{a.full_name}</option>)}
@@ -114,9 +130,11 @@ export default function Sales() {
 
         {/* Table */}
         <div className="overflow-x-auto">
-          {loading ? <div className="p-8 text-center text-slate-500">Cargando ventas...</div>
-          : filtered.length === 0 ? <div className="p-8 text-center text-slate-500">No se encontraron ventas.</div>
-          : (
+          {loading ? (
+            <div className="p-8 text-center text-slate-500">Cargando ventas...</div>
+          ) : filtered.length === 0 ? (
+            <div className="p-8 text-center text-slate-500">No se encontraron ventas.</div>
+          ) : (
             <table className="min-w-full divide-y divide-slate-200">
               <thead>
                 <tr className="bg-slate-50">
@@ -166,6 +184,8 @@ export default function Sales() {
             </table>
           )}
         </div>
+
+        <Pagination page={page} pages={pages} total={total} limit={LIMIT} onPageChange={setPage} />
       </div>
     </div>
   );

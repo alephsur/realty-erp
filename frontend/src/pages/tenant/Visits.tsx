@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Plus, Search, Edit, Trash2, X, Calendar, Clock, MapPin, User, Home, MessageSquare, Star, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 import client from '../../api/client';
 import { useAuth } from '../../hooks/useAuth';
+import Pagination from '../../components/Pagination';
 
 interface VisitData {
   id: string;
@@ -45,9 +46,16 @@ const emptyForm = {
   property_id: '', client_id: '', agent_id: '', scheduled_at: '', duration_minutes: '30', notes: '',
 };
 
+const LIMIT = 25;
+
 export default function Visits() {
   const { user } = useAuth();
+  const isManager = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+
   const [visits, setVisits] = useState<VisitData[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pages, setPages] = useState(1);
   const [stats, setStats] = useState<VisitStats | null>(null);
   const [properties, setProperties] = useState<PropertyOption[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
@@ -65,27 +73,50 @@ export default function Visits() {
   const [feedbackText, setFeedbackText] = useState('');
   const [feedbackRating, setFeedbackRating] = useState(3);
 
-  useEffect(() => { fetchData(); }, []);
-
-  const fetchData = async () => {
+  const fetchVisits = async (p = page, search = searchQuery, status = statusFilter) => {
     try {
       setLoading(true);
-      const isAgent = user?.role === 'AGENT';
-      const [visitsRes, statsRes, propsRes, clientsRes, agentsRes] = await Promise.all([
-        client.get('/visits'),
-        client.get('/visits/stats'),
-        isAgent ? client.get('/properties/my') : client.get('/properties'),
-        client.get('/clients').catch(() => ({ data: [] })),
-        isAgent ? Promise.resolve({ data: [] }) : client.get('/auth/tenant/users').catch(() => ({ data: [] })),
-      ]);
-      setVisits(visitsRes.data);
-      setStats(statsRes.data);
-      setProperties(propsRes.data.map((p: any) => ({ id: p.id, title: p.title })));
-      setClients(clientsRes.data.map((c: any) => ({ id: c.id, full_name: c.full_name })));
-      setAgents(agentsRes.data.map((u: any) => ({ id: u.id, full_name: u.full_name })));
+      const params: Record<string, any> = { page: p, limit: LIMIT };
+      if (search) params.search = search;
+      if (status !== 'ALL') params.status = status;
+      const r = await client.get('/visits', { params });
+      setVisits(r.data.items);
+      setTotal(r.data.total);
+      setPages(r.data.pages);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
   };
+
+  const fetchAuxData = async () => {
+    const isAgent = user?.role === 'AGENT';
+    const [statsRes, propsRes, clientsRes, agentsRes] = await Promise.all([
+      client.get('/visits/stats'),
+      isAgent ? client.get('/properties/my') : client.get('/properties', { params: { limit: 200 } }),
+      client.get('/clients', { params: { limit: 200 } }).catch(() => ({ data: { items: [] } })),
+      isAgent ? Promise.resolve({ data: [] }) : client.get('/auth/tenant/users').catch(() => ({ data: [] })),
+    ]);
+    setStats(statsRes.data);
+    setProperties((propsRes.data.items ?? propsRes.data).map((p: any) => ({ id: p.id, title: p.title })));
+    setClients((clientsRes.data.items ?? clientsRes.data).map((c: any) => ({ id: c.id, full_name: c.full_name })));
+    setAgents(agentsRes.data.map((u: any) => ({ id: u.id, full_name: u.full_name })));
+  };
+
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setPage(1);
+      fetchVisits(1, searchQuery, statusFilter);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    fetchVisits(page, searchQuery, statusFilter);
+  }, [page, statusFilter]);
+
+  useEffect(() => {
+    fetchAuxData();
+  }, []);
 
   const openCreate = () => { setForm(emptyForm); setShowForm(true); setError(''); };
 
@@ -101,7 +132,9 @@ export default function Visits() {
         duration_minutes: parseInt(form.duration_minutes),
         notes: form.notes || null,
       });
-      setShowForm(false); fetchData();
+      setShowForm(false);
+      fetchVisits(page, searchQuery, statusFilter);
+      fetchAuxData();
     } catch (err: any) { setError(err.response?.data?.detail || 'Error creating visit'); }
     finally { setSaving(false); }
   };
@@ -109,14 +142,18 @@ export default function Visits() {
   const handleStatusChange = async (visitId: string, newStatus: string) => {
     try {
       await client.put(`/visits/${visitId}`, { status: newStatus });
-      fetchData();
+      fetchVisits(page, searchQuery, statusFilter);
+      fetchAuxData();
     } catch (err: any) { alert(err.response?.data?.detail || 'Error'); }
   };
 
   const handleDelete = async (id: string) => {
     if (!confirm('¿Eliminar esta visita?')) return;
-    try { await client.delete(`/visits/${id}`); fetchData(); }
-    catch (err: any) { alert(err.response?.data?.detail || 'Error'); }
+    try {
+      await client.delete(`/visits/${id}`);
+      fetchVisits(page, searchQuery, statusFilter);
+      fetchAuxData();
+    } catch (err: any) { alert(err.response?.data?.detail || 'Error'); }
   };
 
   const openFeedback = (v: VisitData) => {
@@ -133,22 +170,12 @@ export default function Visits() {
         rating: feedbackRating,
         status: 'COMPLETED',
       });
-      setFeedbackVisit(null); fetchData();
+      setFeedbackVisit(null);
+      fetchVisits(page, searchQuery, statusFilter);
     } catch (err: any) { alert(err.response?.data?.detail || 'Error'); }
   };
 
-  const filtered = visits.filter(v => {
-    const matchesStatus = statusFilter === 'ALL' || v.status_key === statusFilter;
-    const matchesSearch = (v.property_title || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (v.client_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (v.agent_name || '').toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesStatus && matchesSearch;
-  });
-
   const statusColor = (key: string | null) => VISIT_STATUSES.find(s => s.key === key)?.color || 'bg-slate-100 text-slate-800';
-  const statusLabel = (key: string | null) => VISIT_STATUSES.find(s => s.key === key)?.label || key;
-
-  const isManager = user?.role === 'ADMIN' || user?.role === 'MANAGER';
   const inputCls = "block w-full rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm";
 
   return (
@@ -229,9 +256,15 @@ export default function Visits() {
 
       {/* Status Filters */}
       <div className="flex flex-wrap gap-2">
-        <button onClick={() => setStatusFilter('ALL')} className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${statusFilter === 'ALL' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>Todas</button>
+        <button onClick={() => { setStatusFilter('ALL'); setPage(1); }}
+          className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${statusFilter === 'ALL' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
+          Todas
+        </button>
         {VISIT_STATUSES.map(s => (
-          <button key={s.key} onClick={() => setStatusFilter(s.key)} className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${statusFilter === s.key ? 'bg-slate-900 text-white' : s.color + ' hover:opacity-80'}`}>{s.label}</button>
+          <button key={s.key} onClick={() => { setStatusFilter(s.key); setPage(1); }}
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${statusFilter === s.key ? 'bg-slate-900 text-white' : s.color + ' hover:opacity-80'}`}>
+            {s.label}
+          </button>
         ))}
       </div>
 
@@ -240,14 +273,18 @@ export default function Visits() {
         <div className="p-5 border-b border-slate-100 bg-slate-50/50">
           <div className="relative w-full max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
-            <input type="text" placeholder="Buscar por propiedad, cliente, agente..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+            <input type="text" placeholder="Buscar por propiedad o cliente..."
+              value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2 border-0 ring-1 ring-inset ring-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-inset focus:ring-indigo-600 bg-white" />
           </div>
         </div>
+
         <div className="overflow-x-auto">
-          {loading ? <div className="p-8 text-center text-slate-500">Cargando...</div>
-          : filtered.length === 0 ? <div className="p-8 text-center text-slate-500">No se encontraron visitas.</div>
-          : (
+          {loading ? (
+            <div className="p-8 text-center text-slate-500">Cargando...</div>
+          ) : visits.length === 0 ? (
+            <div className="p-8 text-center text-slate-500">No se encontraron visitas.</div>
+          ) : (
             <table className="min-w-full divide-y divide-slate-200">
               <thead>
                 <tr className="bg-slate-50">
@@ -261,7 +298,7 @@ export default function Visits() {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-slate-200">
-                {filtered.map(v => (
+                {visits.map(v => (
                   <tr key={v.id} className="hover:bg-slate-50/50 transition-colors">
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
@@ -306,7 +343,7 @@ export default function Visits() {
                       ) : <span className="text-xs text-slate-400">Sin valorar</span>}
                     </td>
                     <td className="px-4 py-4 text-right">
-                      <div className="flex items-center justify-end space-x-2">
+                      <div className="flex items-center justify-end space-x-1">
                         <button onClick={() => openFeedback(v)} className="text-slate-400 hover:text-indigo-600 p-1.5 rounded-lg hover:bg-indigo-50" title="Feedback">
                           <MessageSquare className="w-4 h-4" />
                         </button>
@@ -321,6 +358,8 @@ export default function Visits() {
             </table>
           )}
         </div>
+
+        <Pagination page={page} pages={pages} total={total} limit={LIMIT} onPageChange={setPage} />
       </div>
 
       {/* Feedback Modal */}

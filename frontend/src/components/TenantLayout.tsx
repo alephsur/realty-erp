@@ -1,11 +1,13 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, Users, Building, LogOut, Menu, DollarSign, UserCircle, CalendarDays, BarChart2 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useState } from 'react';
+import NotificationBell from './NotificationBell';
 
 export default function TenantLayout() {
   const { user, logout } = useAuth();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const navigate = useNavigate();
 
   const isManager = user?.role === 'ADMIN' || user?.role === 'MANAGER';
 
@@ -64,9 +66,10 @@ export default function TenantLayout() {
               <p className="truncate text-sm font-semibold text-slate-900">{user?.fullName || user?.email}</p>
               <p className="truncate text-xs font-medium text-slate-500 uppercase">{user?.role}</p>
             </div>
+            <NotificationBell />
           </div>
           <button
-            onClick={logout}
+            onClick={() => logout().then(() => navigate('/login'))}
             className="group flex w-full items-center space-x-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-600 transition-all hover:bg-red-50 hover:text-red-700"
           >
             <LogOut className="h-5 w-5 text-slate-400 group-hover:text-red-600" />
@@ -85,12 +88,15 @@ export default function TenantLayout() {
             </div>
             <span className="text-xl font-bold tracking-tight text-slate-900">RealtyApp</span>
           </div>
-          <button
-            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
-          >
-            <Menu className="h-6 w-6" />
-          </button>
+          <div className="flex items-center gap-2">
+            <NotificationBell />
+            <button
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+            >
+              <Menu className="h-6 w-6" />
+            </button>
+          </div>
         </header>
 
         {isMobileMenuOpen && (

@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Edit, Trash2, X, Save, User, Phone, Mail, MapPin, Home } from 'lucide-react';
+import { Plus, Search, Edit, Trash2, X, User, Phone, Mail, MapPin, Home, Building } from 'lucide-react';
 import client from '../../api/client';
 import { useAuth } from '../../hooks/useAuth';
+import Pagination from '../../components/Pagination';
 
 interface ClientData {
   id: string;
@@ -28,6 +29,23 @@ interface ClientData {
 
 interface AgentOption { id: string; full_name: string; }
 
+interface MatchingProperty {
+  id: string;
+  title: string;
+  reference: string | null;
+  property_type: string | null;
+  price: number;
+  city: string | null;
+  address: string;
+  bedrooms: number;
+  bathrooms: number;
+  sqm: number;
+  status: string | null;
+  agent_name: string | null;
+  match_score: number;
+  match_reasons: string[];
+}
+
 const CLIENT_TYPES = [
   { key: 'OWNER', label: 'Propietario', value: 'Propietario' },
   { key: 'BUYER', label: 'Demandante', value: 'Demandante' },
@@ -38,9 +56,16 @@ const emptyForm = {
   dni: '', address: '', budget_min: '', budget_max: '', desired_zones: '', desired_type: '', notes: '',
 };
 
+const LIMIT = 25;
+
 export default function Clients() {
   const { user } = useAuth();
+  const isManager = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+
   const [clients, setClients] = useState<ClientData[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pages, setPages] = useState(1);
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -54,20 +79,48 @@ export default function Clients() {
   // Detail view
   const [selectedClient, setSelectedClient] = useState<ClientData | null>(null);
 
-  useEffect(() => { fetchData(); }, []);
+  // Matching modal
+  const [matchClient, setMatchClient] = useState<ClientData | null>(null);
+  const [matchProps, setMatchProps] = useState<MatchingProperty[]>([]);
+  const [loadingMatch, setLoadingMatch] = useState(false);
 
-  const fetchData = async () => {
+  const fetchClients = async (p = page, search = searchQuery, type = typeFilter) => {
     try {
       setLoading(true);
-      const [clientsRes, agentsRes] = await Promise.all([
-        client.get('/clients'),
-        client.get('/auth/tenant/users').catch(() => ({ data: [] })),
-      ]);
-      setClients(clientsRes.data);
-      setAgents(agentsRes.data.map((u: any) => ({ id: u.id, full_name: u.full_name })));
+      const params: Record<string, any> = { page: p, limit: LIMIT };
+      if (search) params.search = search;
+      if (type !== 'ALL') params.client_type = type === 'OWNER' ? 'Propietario' : 'Demandante';
+      const r = await client.get('/clients', { params });
+      setClients(r.data.items);
+      setTotal(r.data.total);
+      setPages(r.data.pages);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
   };
+
+  const fetchAgents = async () => {
+    try {
+      const r = await client.get('/auth/tenant/users');
+      setAgents(r.data.map((u: any) => ({ id: u.id, full_name: u.full_name })));
+    } catch { /* ignore */ }
+  };
+
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setPage(1);
+      fetchClients(1, searchQuery, typeFilter);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    fetchClients(page, searchQuery, typeFilter);
+  }, [page, typeFilter]);
+
+  useEffect(() => {
+    fetchAgents();
+  }, []);
 
   const openCreate = () => { setForm(emptyForm); setEditingId(null); setShowForm(true); setError(''); };
 
@@ -98,28 +151,33 @@ export default function Clients() {
     try {
       if (editingId) { await client.put(`/clients/${editingId}`, payload); }
       else { await client.post('/clients', payload); }
-      setShowForm(false); setEditingId(null); fetchData();
+      setShowForm(false); setEditingId(null);
+      fetchClients(1, searchQuery, typeFilter);
     } catch (err: any) { setError(err.response?.data?.detail || 'Error saving client'); }
     finally { setSaving(false); }
   };
 
   const handleDelete = async (id: string) => {
     if (!confirm('¿Eliminar este cliente?')) return;
-    try { await client.delete(`/clients/${id}`); fetchData(); if (selectedClient?.id === id) setSelectedClient(null); }
-    catch (err: any) { alert(err.response?.data?.detail || 'Error'); }
+    try {
+      await client.delete(`/clients/${id}`);
+      fetchClients(page, searchQuery, typeFilter);
+      if (selectedClient?.id === id) setSelectedClient(null);
+    } catch (err: any) { alert(err.response?.data?.detail || 'Error'); }
   };
 
-  const filtered = clients.filter(c => {
-    const matchesSearch = c.full_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (c.email || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (c.phone || '').toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesType = typeFilter === 'ALL' || c.client_type_key === typeFilter;
-    return matchesSearch && matchesType;
-  });
+  const openMatchModal = async (c: ClientData) => {
+    setMatchClient(c);
+    setMatchProps([]);
+    setLoadingMatch(true);
+    try {
+      const res = await client.get(`/clients/${c.id}/matching-properties`);
+      setMatchProps(res.data.matches);
+    } catch { /* ignore */ }
+    finally { setLoadingMatch(false); }
+  };
 
   const inputCls = "block w-full rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm";
-
-  const isManager = user?.role === 'ADMIN' || user?.role === 'MANAGER';
 
   return (
     <div className="p-8 space-y-6">
@@ -177,7 +235,7 @@ export default function Clients() {
                 <div><label className="block text-sm font-semibold text-slate-700 mb-1">Zonas Deseadas</label>
                   <input value={form.desired_zones} onChange={e => setForm({...form, desired_zones: e.target.value})} className={inputCls} placeholder="Centro, Ensanche..." /></div>
                 <div><label className="block text-sm font-semibold text-slate-700 mb-1">Tipo Preferido</label>
-                  <input value={form.desired_type} onChange={e => setForm({...form, desired_type: e.target.value})} className={inputCls} placeholder="Piso, Chalet..." /></div>
+                  <input value={form.desired_type} onChange={e => setForm({...form, desired_type: e.target.value})} className={inputCls} placeholder="PISO, CHALET..." /></div>
               </div>
             )}
             <div><label className="block text-sm font-semibold text-slate-700 mb-1">Notas</label>
@@ -191,11 +249,78 @@ export default function Clients() {
         </div>
       )}
 
-      {/* Type Filters */}
+      {/* Matching Properties Modal */}
+      {matchClient && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl mx-4 overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Propiedades compatibles</h3>
+                <p className="text-sm text-slate-500 mt-0.5">{matchClient.full_name}</p>
+              </div>
+              <button onClick={() => setMatchClient(null)} className="text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto">
+              {loadingMatch ? (
+                <div className="p-8 text-center text-slate-500">Buscando propiedades compatibles...</div>
+              ) : matchProps.length === 0 ? (
+                <div className="p-8 text-center">
+                  <Building className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                  <p className="text-slate-500 font-medium">Sin propiedades compatibles</p>
+                  <p className="text-sm text-slate-400 mt-1">Ninguna propiedad publicada encaja con el presupuesto, zona y tipo de este comprador.</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {matchProps.map(p => (
+                    <div key={p.id} className="px-6 py-4 hover:bg-slate-50">
+                      <div className="flex items-start gap-4">
+                        <div className="w-9 h-9 rounded-lg bg-indigo-100 flex items-center justify-center flex-shrink-0">
+                          <Home className="w-4 h-4 text-indigo-600" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="text-sm font-semibold text-slate-900">{p.title}</p>
+                            <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-700">
+                              Match {p.match_score}pts
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap gap-3 mt-1 text-xs text-slate-500">
+                            <span className="font-semibold text-slate-700">{p.price.toLocaleString('es-ES')} €</span>
+                            {p.city && <span><MapPin className="w-3 h-3 inline" /> {p.city}</span>}
+                            {p.property_type && <span>{p.property_type}</span>}
+                            <span>{p.bedrooms}hab · {p.bathrooms}baños · {p.sqm}m²</span>
+                            {p.agent_name && <span>Agente: {p.agent_name}</span>}
+                          </div>
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            {p.match_reasons.map(r => (
+                              <span key={r} className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 text-xs">{r}</span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Type Filter Pills */}
       <div className="flex flex-wrap gap-2">
-        <button onClick={() => setTypeFilter('ALL')} className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${typeFilter === 'ALL' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>Todos</button>
-        <button onClick={() => setTypeFilter('OWNER')} className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${typeFilter === 'OWNER' ? 'bg-slate-900 text-white' : 'bg-blue-100 text-blue-800 hover:opacity-80'}`}>Propietarios</button>
-        <button onClick={() => setTypeFilter('BUYER')} className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${typeFilter === 'BUYER' ? 'bg-slate-900 text-white' : 'bg-emerald-100 text-emerald-800 hover:opacity-80'}`}>Demandantes</button>
+        <button onClick={() => { setTypeFilter('ALL'); setPage(1); }}
+          className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${typeFilter === 'ALL' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
+          Todos
+        </button>
+        <button onClick={() => { setTypeFilter('OWNER'); setPage(1); }}
+          className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${typeFilter === 'OWNER' ? 'bg-slate-900 text-white' : 'bg-blue-100 text-blue-800 hover:opacity-80'}`}>
+          Propietarios
+        </button>
+        <button onClick={() => { setTypeFilter('BUYER'); setPage(1); }}
+          className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${typeFilter === 'BUYER' ? 'bg-slate-900 text-white' : 'bg-emerald-100 text-emerald-800 hover:opacity-80'}`}>
+          Demandantes
+        </button>
       </div>
 
       {/* Clients Table */}
@@ -203,14 +328,18 @@ export default function Clients() {
         <div className="p-5 border-b border-slate-100 bg-slate-50/50">
           <div className="relative w-full max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
-            <input type="text" placeholder="Buscar clientes..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+            <input type="text" placeholder="Buscar clientes..." value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2 border-0 ring-1 ring-inset ring-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-inset focus:ring-indigo-600 bg-white" />
           </div>
         </div>
+
         <div className="overflow-x-auto">
-          {loading ? <div className="p-8 text-center text-slate-500">Cargando...</div>
-          : filtered.length === 0 ? <div className="p-8 text-center text-slate-500">No se encontraron clientes.</div>
-          : (
+          {loading ? (
+            <div className="p-8 text-center text-slate-500">Cargando...</div>
+          ) : clients.length === 0 ? (
+            <div className="p-8 text-center text-slate-500">No se encontraron clientes.</div>
+          ) : (
             <table className="min-w-full divide-y divide-slate-200">
               <thead>
                 <tr className="bg-slate-50">
@@ -223,7 +352,7 @@ export default function Clients() {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-slate-200">
-                {filtered.map(c => (
+                {clients.map(c => (
                   <tr key={c.id} className="hover:bg-slate-50/50 transition-colors cursor-pointer" onClick={() => setSelectedClient(c)}>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
@@ -258,10 +387,21 @@ export default function Clients() {
                       ) : '—'}
                     </td>
                     <td className="px-4 py-4 text-right" onClick={e => e.stopPropagation()}>
-                      <div className="flex items-center justify-end space-x-2">
-                        <button onClick={() => openEdit(c)} className="text-slate-400 hover:text-indigo-600 p-1.5 rounded-lg hover:bg-indigo-50" title="Editar"><Edit className="w-4 h-4" /></button>
+                      <div className="flex items-center justify-end space-x-1">
+                        {/* Match button for buyers */}
+                        {c.client_type_key === 'BUYER' && (
+                          <button onClick={() => openMatchModal(c)}
+                            className="text-slate-400 hover:text-purple-600 p-1.5 rounded-lg hover:bg-purple-50" title="Propiedades compatibles">
+                            <Home className="w-4 h-4" />
+                          </button>
+                        )}
+                        <button onClick={() => openEdit(c)} className="text-slate-400 hover:text-indigo-600 p-1.5 rounded-lg hover:bg-indigo-50" title="Editar">
+                          <Edit className="w-4 h-4" />
+                        </button>
                         {isManager && (
-                          <button onClick={() => handleDelete(c.id)} className="text-slate-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50" title="Eliminar"><Trash2 className="w-4 h-4" /></button>
+                          <button onClick={() => handleDelete(c.id)} className="text-slate-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50" title="Eliminar">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         )}
                       </div>
                     </td>
@@ -271,6 +411,8 @@ export default function Clients() {
             </table>
           )}
         </div>
+
+        <Pagination page={page} pages={pages} total={total} limit={LIMIT} onPageChange={setPage} />
       </div>
 
       {/* Client Detail Modal */}

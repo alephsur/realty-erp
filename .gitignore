@@ -1,1 +1,4 @@
 implementation_plan.md
+backend/.env
+.node_modules
+.venv
