@@ -3,6 +3,7 @@ from .client import ClientRead
 from .visit import VisitRead
 from .report import TopSaleRead
 from .notification import NotificationRead
+from .appointment import AppointmentRead
 
 __all__ = [
     "PropertyRead",
@@ -12,4 +13,5 @@ __all__ = [
     "VisitRead",
     "TopSaleRead",
     "NotificationRead",
+    "AppointmentRead",
 ]

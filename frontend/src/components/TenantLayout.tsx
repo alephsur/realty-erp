@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Users, Building, LogOut, Menu, DollarSign, UserCircle, CalendarDays, BarChart2 } from 'lucide-react';
+import { LayoutDashboard, Users, Building, LogOut, Menu, DollarSign, UserCircle, CalendarDays, BarChart2, CalendarRange } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useState } from 'react';
 import NotificationBell from './NotificationBell';
@@ -16,6 +16,7 @@ export default function TenantLayout() {
     { name: 'Propiedades', href: '/properties', icon: Building, show: true },
     { name: 'Clientes', href: '/clients', icon: UserCircle, show: true },
     { name: 'Visitas', href: '/visits', icon: CalendarDays, show: true },
+    { name: 'Calendario', href: '/calendar', icon: CalendarRange, show: true },
     { name: 'Ventas', href: '/sales', icon: DollarSign, show: true },
     { name: 'Reportes', href: '/reports', icon: BarChart2, show: isManager },
     { name: 'Empleados', href: '/employees', icon: Users, show: isManager },

@@ -4,3 +4,4 @@ from .crm import Client, ClientPropertyInterest
 from .transactions import Sale
 from .visits import Visit
 from .notes import Note
+from .appointments import Appointment
