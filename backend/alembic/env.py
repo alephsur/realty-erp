@@ -5,7 +5,7 @@ from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
 from alembic import context
-from app.database import Base
+from app.database import Base, SQLALCHEMY_DATABASE_URL
 
 # Model dependencies
 from app.models import Tenant, User, Property, Client, Sale
@@ -18,7 +18,7 @@ logger = logging.getLogger("alembic.env")
 target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
+    url = SQLALCHEMY_DATABASE_URL
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -30,8 +30,14 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 def run_migrations_online() -> None:
+    configuration = config.get_section(config.config_ini_section)
+    if configuration is not None:
+        configuration["sqlalchemy.url"] = SQLALCHEMY_DATABASE_URL
+    else:
+        configuration = {"sqlalchemy.url": SQLALCHEMY_DATABASE_URL}
+        
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section),
+        configuration,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
