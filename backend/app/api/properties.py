@@ -10,6 +10,7 @@ from app.models.auth import User, RoleEnum
 from app.models.properties import Property, PropertyStatus, PropertyType
 from app.models.transactions import Sale
 from app.models.crm import Client
+from app.models.commissions import CommissionPayment, CommissionStatus
 from app.api.dependencies import get_current_user
 from app.schemas import PropertyRead, SaleRead, AgentRankingRead
 
@@ -496,6 +497,16 @@ def sell_property(property_id: str, data: SellPropertyRequest, db: Session = Dep
         notes=data.notes,
     )
     db.add(sale)
+    db.flush()  # get sale.id before creating the payment
+
+    commission_payment = CommissionPayment(
+        tenant_id=current_user.tenant_id,
+        sale_id=sale.id,
+        agent_id=sale_agent_id,
+        amount=agent_commission,
+        status=CommissionStatus.PENDING,
+    )
+    db.add(commission_payment)
     prop.status = PropertyStatus.VENDIDA
     db.commit()
 

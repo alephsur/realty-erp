@@ -140,6 +140,7 @@ from app.api.visits import router as visits_router
 from app.api.reports import router as reports_router
 from app.api.notifications import router as notifications_router
 from app.api.calendar import router as calendar_router
+from app.api.commissions import router as commissions_router
 
 app.include_router(auth_router)
 app.include_router(properties_router)
@@ -148,3 +149,4 @@ app.include_router(visits_router)
 app.include_router(reports_router)
 app.include_router(notifications_router)
 app.include_router(calendar_router)
+app.include_router(commissions_router)

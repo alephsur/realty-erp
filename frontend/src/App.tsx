@@ -14,6 +14,7 @@ import Visits from './pages/tenant/Visits';
 import Reports from './pages/tenant/Reports';
 import CalendarPage from './pages/tenant/Calendar';
 import PropertyKanban from './pages/tenant/PropertyKanban';
+import Commissions from './pages/tenant/Commissions';
 
 const Unauthorized = () => <div className="flex justify-center items-center h-screen text-2xl font-bold text-slate-800">403 Unauthorized Access</div>;
 
@@ -52,6 +53,7 @@ function App() {
               <Route element={<TenantLayout />}>
                 <Route path="/employees" element={<Employees />} />
                 <Route path="/reports" element={<Reports />} />
+                <Route path="/commissions" element={<Commissions />} />
               </Route>
             </Route>
           </Route>
