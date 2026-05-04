@@ -372,6 +372,9 @@ def update_property(property_id: str, data: PropertyUpdate, db: Session = Depend
         raise HTTPException(status_code=404, detail="Property not found")
 
     update_data = data.model_dump(exclude_unset=True)
+    if "status" in update_data and update_data["status"] != prop.status:
+        from datetime import datetime, timezone
+        update_data["status_changed_at"] = datetime.now(timezone.utc)
     for key, value in update_data.items():
         setattr(prop, key, value)
 

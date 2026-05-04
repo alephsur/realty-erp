@@ -59,6 +59,7 @@ class Property(Base):
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    status_changed_at = Column(DateTime(timezone=True), server_default=func.now())
     
     agent = relationship("User", back_populates="properties")
     sales = relationship("Sale", back_populates="property")

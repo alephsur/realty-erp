@@ -39,6 +39,7 @@ class PropertyRead(BaseModel):
     agent_id: Optional[str] = None
     agent_name: Optional[str] = None
     created_at: Optional[str] = None
+    status_changed_at: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -69,6 +70,7 @@ class PropertyRead(BaseModel):
             "agent_id": str(p.agent_id) if p.agent_id else None,
             "agent_name": p.agent.full_name if p.agent else None,
             "created_at": p.created_at.isoformat() if p.created_at else None,
+            "status_changed_at": p.status_changed_at.isoformat() if p.status_changed_at else None,
         }
 
 
