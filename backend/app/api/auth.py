@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import update as sa_update
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+import hashlib
 import secrets
 import logging
 
@@ -335,24 +337,23 @@ def invite_user(
     if db.query(User).filter(User.email == data.email).first():
         raise HTTPException(status_code=400, detail="User with this email already exists")
 
-    dummy_password = secrets.token_urlsafe(32)
-    pwd_ver = get_password_hash(dummy_password)
+    raw_token = secrets.token_urlsafe(32)
 
     new_user = User(
         tenant_id=tenant.id,
         email=data.email,
-        password_hash=pwd_ver,
+        password_hash=get_password_hash(secrets.token_urlsafe(32)),
         full_name=data.full_name,
         role=data.role,
+        is_active=False,
+        invite_token_hash=hashlib.sha256(raw_token.encode()).hexdigest(),
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
-    pwd_ver_short = pwd_ver[-10:]
-    token = create_invite_token(new_user.email, str(tenant.id), pwd_ver_short)
-
-    invite_link = f"http://localhost:5173/accept-invite?token={token}"
+    token = create_invite_token(new_user.email, str(tenant.id), raw_token)
+    invite_link = f"{settings.FRONTEND_URL}/accept-invite?token={token}"
     logger.warning(f"INVITATION LINK GENERATED FOR {data.email}: {invite_link}")
 
     return {"message": "User invited", "invite_link": invite_link}
@@ -368,20 +369,25 @@ def accept_invite(data: AcceptInvite, db: Session = Depends(get_db)):
     try:
         payload = decode_invite_token(data.token)
         email = payload.get("sub")
-        pwd_ver = payload.get("pwd_ver")
-    except JWTError:
+        raw_token = payload.get("invite_token")
+        if not email or not raw_token:
+            raise ValueError("Missing claims")
+    except (JWTError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid or expired invite token")
 
-    user = db.query(User).filter(User.email == email).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    new_password_hash = get_password_hash(data.new_password)
 
-    if user.password_hash[-10:] != pwd_ver:
-        raise HTTPException(status_code=400, detail="Invite token already used")
-
-    user.password_hash = get_password_hash(data.new_password)
-    user.is_active = True
+    result = db.execute(
+        sa_update(User)
+        .where(User.email == email, User.invite_token_hash == token_hash)
+        .values(password_hash=new_password_hash, is_active=True, invite_token_hash=None)
+    )
     db.commit()
+
+    if result.rowcount == 0:
+        raise HTTPException(status_code=400, detail="Invite token already used or invalid")
+
     return {"message": "Password updated successfully. You can now login."}
 
 
@@ -539,15 +545,12 @@ def generate_user_invite(
     if not user:
         raise HTTPException(status_code=404, detail="Employee not found")
 
-    dummy_password = secrets.token_urlsafe(32)
-    pwd_ver = get_password_hash(dummy_password)
-    user.password_hash = pwd_ver
+    raw_token = secrets.token_urlsafe(32)
+    user.invite_token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
     db.commit()
 
-    pwd_ver_short = pwd_ver[-10:]
-    token = create_invite_token(user.email, str(user.tenant_id), pwd_ver_short)
-
-    invite_link = f"http://localhost:5173/accept-invite?token={token}"
+    token = create_invite_token(user.email, str(user.tenant_id), raw_token)
+    invite_link = f"{settings.FRONTEND_URL}/accept-invite?token={token}"
     logger.warning(f"INVITATION LINK GENERATED FOR {user.email}: {invite_link}")
 
     return {"message": "Invite link generated", "invite_link": invite_link}

@@ -32,6 +32,10 @@ interface VisitData {
   status: string | null;
 }
 
+interface PaginatedResponse<T> {
+  items: T[];
+}
+
 const STATUS_COLORS: Record<string, string> = {
   CAPTADA: 'bg-slate-100 text-slate-800',
   PUBLICADA: 'bg-blue-100 text-blue-800',
@@ -57,19 +61,24 @@ export default function AgentDashboard() {
   const [properties, setProperties] = useState<PropertyData[]>([]);
   const [visits, setVisits] = useState<VisitData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
+        setError(null);
         const [statsRes, propsRes, visitsRes] = await Promise.all([
-          client.get('/properties/stats/agent-summary'),
-          client.get('/properties/my'),
-          client.get('/visits/my'),
+          client.get<AgentStats>('/properties/stats/agent-summary'),
+          client.get<PaginatedResponse<PropertyData>>('/properties/my', { params: { limit: 200 } }),
+          client.get<PaginatedResponse<VisitData>>('/visits/my', { params: { limit: 200 } }),
         ]);
         setStats(statsRes.data);
-        setProperties(propsRes.data);
-        setVisits(visitsRes.data);
-      } catch (err) { console.error(err); }
+        setProperties(propsRes.data.items);
+        setVisits(visitsRes.data.items);
+      } catch (err) {
+        console.error(err);
+        setError('No se pudo cargar la información del agente. Inténtalo de nuevo.');
+      }
       finally { setLoading(false); }
     };
     fetchData();
@@ -84,6 +93,16 @@ export default function AgentDashboard() {
 
   if (loading) {
     return <div className="flex items-center justify-center min-h-[60vh]"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div></div>;
+  }
+
+  if (error) {
+    return (
+      <div className="p-8">
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          {error}
+        </div>
+      </div>
+    );
   }
 
   return (

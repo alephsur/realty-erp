@@ -37,6 +37,8 @@ class User(Base):
     must_change_password = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    invite_token_hash = Column(String, nullable=True)
+
     # Agent-specific fields
     phone = Column(String, nullable=True)
     license_number = Column(String, nullable=True)  # Nº de colegiado / licencia
