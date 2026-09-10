@@ -39,7 +39,6 @@ class ClientUpdate(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     client_type: Optional[ClientType] = None
-    agent_id: Optional[str] = None
     dni: Optional[str] = None
     address: Optional[str] = None
     budget_min: Optional[float] = None
@@ -47,7 +46,6 @@ class ClientUpdate(BaseModel):
     desired_zones: Optional[str] = None
     desired_type: Optional[str] = None
     notes: Optional[str] = None
-    is_active: Optional[bool] = None
 
 class PropertyInterestCreate(BaseModel):
     property_id: str

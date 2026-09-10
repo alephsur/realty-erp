@@ -44,9 +44,7 @@ export default function Login() {
       // We only persist the profile in React context.
       login(userData);
 
-      if (must_change_password) {
-        navigate('/change-password');
-      } else if (raw.role === 'SUPER_ADMIN') {
+      if (raw.role === 'SUPER_ADMIN') {
         navigate('/superadmin');
       } else {
         navigate('/dashboard');

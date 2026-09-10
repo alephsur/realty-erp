@@ -22,13 +22,12 @@ def create_access_token(user_id: str, role: str, tenant_id: Optional[str] = None
 def decode_access_token(token: str) -> dict[str, Any]:
     return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
 
-def create_invite_token(email: str, tenant_id: str, pwd_ver: str) -> str:
-    # Token valid for 48 hours for invitations
+def create_invite_token(email: str, tenant_id: str, invite_token: str) -> str:
     expire = datetime.utcnow() + timedelta(hours=48)
     to_encode = {
         "sub": email,
         "tenant_id": str(tenant_id),
-        "pwd_ver": pwd_ver,
+        "invite_token": invite_token,
         "exp": expire,
         "type": "invite"
     }

@@ -43,7 +43,6 @@ class AppointmentCreate(BaseModel):
 class AppointmentUpdate(BaseModel):
     title: Optional[str] = None
     appointment_type: Optional[AppointmentType] = None
-    agent_id: Optional[str] = None
     start_at: Optional[str] = None
     end_at: Optional[str] = None
     description: Optional[str] = None

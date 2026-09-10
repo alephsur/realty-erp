@@ -34,8 +34,6 @@ class VisitUpdate(BaseModel):
     feedback: Optional[str] = None
     rating: Optional[int] = None
     notes: Optional[str] = None
-    client_id: Optional[str] = None
-    agent_id: Optional[str] = None
 
 
 # ==========================================
