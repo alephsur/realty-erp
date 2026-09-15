@@ -34,7 +34,7 @@ class PropertyRead(BaseModel):
     owner_name: Optional[str] = None
     owner_phone: Optional[str] = None
     owner_email: Optional[str] = None
-    commission_rate: float = 0.0
+    commission_rate: Optional[float] = None
     agent_commission_rate: Optional[float] = None
     agent_id: Optional[str] = None
     agent_name: Optional[str] = None
@@ -75,6 +75,10 @@ class PropertyRead(BaseModel):
 
 
 class SaleRead(BaseModel):
+    is_active: bool
+    version: int
+    commission_rate: Optional[float] = None
+    agent_commission_rate: Optional[float] = None
     id: str
     property_id: str
     property_title: Optional[str] = None
@@ -99,6 +103,10 @@ class SaleRead(BaseModel):
         s = data
         return {
             "id": str(s.id),
+            "is_active": s.is_active,
+            "version": s.version,
+            "commission_rate": s.commission_rate,
+            "agent_commission_rate": s.agent_commission_rate,
             "property_id": str(s.property_id),
             "property_title": s.property.title if s.property else None,
             "property_reference": s.property.reference if s.property else None,

@@ -105,6 +105,13 @@ Registro de transacciones cerradas. Calcula y almacena automáticamente:
 - `agent_commission` — parte correspondiente al agente.
 - `agency_commission` — parte correspondiente a la agencia.
 
+El cierre utiliza un formulario común desde Propiedades, el tablero y Ventas.
+Exige comprador, precio final, agente y porcentajes de comisión; admite al agente
+asignado y a los responsables de la agencia, con protección frente a reintentos.
+Las reglas, migración y comprobaciones están en [F0-02 — Cierre único](docs/F0-02.md).
+
+Correcciones, reaperturas y ajustes de comisión: [F0-03](docs/F0-03.md).
+
 ---
 
 ### Comisiones (`/commissions`)
@@ -293,6 +300,11 @@ Las pruebas de F0-01 verifican la carga de `.env`, la prioridad de las variables
 proceso y el arranque de la API y su esquema OpenAPI. Se ejecutan con configuración
 temporal y no acceden a la base de datos del desarrollador. Las pruebas completas
 del flujo comercial corresponden a F0-06.
+
+Las pruebas de cierre de F0-02 se ejecutan con
+`RUN_POSTGRES_TESTS=1 uv run --locked pytest` desde `backend/`; crean y eliminan su
+propio contenedor PostgreSQL. Sin esa variable se omiten las pruebas que requieren
+PostgreSQL. El frontend incorpora `npm test` para los cálculos y el formulario.
 
 Para verificar las migraciones desde cero sin utilizar los datos habituales,
 arranca un proyecto Compose independiente, desde la raíz:

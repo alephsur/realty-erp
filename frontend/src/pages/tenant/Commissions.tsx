@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Euro, Clock, CheckCircle, FileText, ChevronDown, ChevronRight,
   Printer, X, AlertCircle,
@@ -10,6 +10,9 @@ import client from '../../api/client';
 interface CommissionItem {
   id: string;
   sale_id: string;
+  kind: string;
+  settlement_amount?: number | null;
+  settlement_notes?: string | null;
   agent_id: string | null;
   agent_name: string;
   amount: number;
@@ -28,6 +31,7 @@ interface AgentGroup {
   agent_id: string;
   agent_name: string;
   total_pending: number;
+  balance_token: string;
   commissions: CommissionItem[];
 }
 
@@ -63,7 +67,7 @@ function statusBadge(status: CommissionItem['status']) {
   const map = {
     PENDING:  { label: 'Pendiente',  cls: 'bg-amber-100 text-amber-800' },
     INVOICED: { label: 'Facturada',  cls: 'bg-blue-100 text-blue-800' },
-    PAID:     { label: 'Pagada',     cls: 'bg-emerald-100 text-emerald-800' },
+    PAID:     { label: 'Liquidada',     cls: 'bg-emerald-100 text-emerald-800' },
   };
   const { label, cls } = map[status] ?? { label: status, cls: 'bg-slate-100 text-slate-700' };
   return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${cls}`}>{label}</span>;
@@ -146,14 +150,34 @@ function exportPDF(agents: AgentGroup[], period: string) {
 
 interface ActionModalProps {
   mode: 'pay' | 'invoice';
-  commissionId: string;   // sale_id
+  commissionId: string;
+  balanceToken?: string;
   agentName: string;
   amount: number;
   onClose: () => void;
   onSuccess: () => void;
 }
 
-function ActionModal({ mode, commissionId, agentName, amount, onClose, onSuccess }: ActionModalProps) {
+function ActionModal({ mode, commissionId, balanceToken, agentName, amount, onClose, onSuccess }: ActionModalProps) {
+  const attempt = useRef<{ signature: string; id: string } | null>(null);
+  const submitting = useRef(false);
+  const dialog = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement;
+    dialog.current?.focus();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !submitting.current) onClose();
+      if (event.key === 'Tab') {
+        const controls = dialog.current?.querySelectorAll<HTMLElement>('button:enabled, input:enabled, textarea:enabled');
+        if (!controls?.length) return;
+        const first = controls[0], last = controls[controls.length - 1];
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener('keydown', handleKey);
+    return () => { document.removeEventListener('keydown', handleKey); if (previous instanceof HTMLElement) previous.focus(); };
+  }, [onClose]);
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [notes, setNotes] = useState('');
@@ -161,46 +185,52 @@ function ActionModal({ mode, commissionId, agentName, amount, onClose, onSuccess
   const [error, setError] = useState<string | null>(null);
 
   const submit = async () => {
+    if (submitting.current || !paymentDate) return;
+    submitting.current = true;
     setLoading(true);
     setError(null);
     try {
-      const endpoint = mode === 'pay' ? 'pay' : 'invoice';
+      const endpoint = mode === 'pay' ? `/commissions/agents/${commissionId}/settle` : `/commissions/entries/${commissionId}/invoice`;
       const body = mode === 'pay'
-        ? { payment_date: paymentDate, invoice_number: invoiceNumber || null, notes: notes || null }
+        ? { balance_token: balanceToken, payment_date: paymentDate, invoice_number: invoiceNumber || null, notes: notes || null }
         : { invoice_number: invoiceNumber || null, notes: notes || null };
-      await client.post(`/commissions/${commissionId}/${endpoint}`, body);
+      const signature = JSON.stringify(body);
+      if (attempt.current?.signature !== signature) attempt.current = { signature, id: crypto.randomUUID() };
+      await client.post(endpoint, mode === 'pay' ? { ...body, request_id: attempt.current.id } : body);
       onSuccess();
     } catch (e: any) {
       setError(e?.response?.data?.detail ?? 'Error al procesar la comisión');
     } finally {
+      submitting.current = false;
       setLoading(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="w-full max-w-md rounded-xl bg-white shadow-xl p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div ref={dialog} role="dialog" aria-modal="true" aria-labelledby="commission-action-title" tabIndex={-1} className="max-h-[90vh] overflow-y-auto w-full max-w-md rounded-xl bg-white shadow-xl p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-bold text-slate-900">
-            {mode === 'pay' ? 'Marcar como pagada' : 'Marcar como facturada'}
+          <h2 id="commission-action-title" className="text-lg font-bold text-slate-900">
+            {mode === 'pay' ? (amount < 0 ? 'Registrar devolución recibida' : amount === 0 ? 'Compensar movimientos' : 'Liquidar saldo del agente') : 'Marcar como facturada'}
           </h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
+          <button disabled={loading} onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
         </div>
 
         <p className="text-sm text-slate-600 mb-4">
           Agente: <span className="font-semibold">{agentName}</span> — Importe: <span className="font-semibold text-indigo-700">{fmt(amount)}</span>
         </p>
 
+        {mode === 'pay' && <p className="mb-4 text-sm text-slate-600">{amount < 0 ? 'Este saldo es a favor de la agencia. Confirma solo cuando hayas recibido la devolución. Si esperas, se descontará automáticamente de futuras comisiones.' : amount === 0 ? 'Los abonos y descuentos se compensan sin transferir dinero.' : 'El importe incluye todas las comisiones y descuentos pendientes de este agente. Confirma cuando hayas realizado el pago.'}</p>}
         {error && (
           <div className="flex items-center gap-2 mb-4 text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm">
             <AlertCircle className="h-4 w-4 flex-shrink-0" />{error}
           </div>
         )}
 
-        <div className="space-y-3">
+        <fieldset disabled={loading} className="space-y-3">
           {mode === 'pay' && (
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Fecha de pago</label>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">{amount < 0 ? 'Fecha de devolución' : amount === 0 ? 'Fecha de compensación' : 'Fecha de pago'}</label>
               <input type="date" value={paymentDate} onChange={e => setPaymentDate(e.target.value)}
                 className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
             </div>
@@ -215,10 +245,10 @@ function ActionModal({ mode, commissionId, agentName, amount, onClose, onSuccess
             <textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)}
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none" />
           </div>
-        </div>
+        </fieldset>
 
         <div className="flex gap-3 mt-5">
-          <button onClick={onClose}
+          <button disabled={loading} onClick={onClose}
             className="flex-1 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
             Cancelar
           </button>
@@ -226,7 +256,7 @@ function ActionModal({ mode, commissionId, agentName, amount, onClose, onSuccess
             className={`flex-1 rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors ${
               mode === 'pay' ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-blue-600 hover:bg-blue-500'
             } disabled:opacity-60`}>
-            {loading ? 'Guardando…' : mode === 'pay' ? 'Confirmar pago' : 'Confirmar factura'}
+            {loading ? 'Guardando…' : mode === 'pay' ? (amount < 0 ? 'Confirmar devolución' : amount === 0 ? 'Confirmar compensación' : 'Confirmar pago') : 'Confirmar factura'}
           </button>
         </div>
       </div>
@@ -236,7 +266,7 @@ function ActionModal({ mode, commissionId, agentName, amount, onClose, onSuccess
 
 // ─── Agent row (expandable) ──────────────────────────────────────────────────
 
-function AgentRow({ group, onAction }: { group: AgentGroup; onAction: (c: CommissionItem, mode: 'pay' | 'invoice') => void }) {
+function AgentRow({ group, onAction, onSettle }: { group: AgentGroup; onAction: (c: CommissionItem, mode: 'pay' | 'invoice') => void; onSettle: () => void }) {
   const [open, setOpen] = useState(true);
   const Icon = open ? ChevronDown : ChevronRight;
 
@@ -249,11 +279,15 @@ function AgentRow({ group, onAction }: { group: AgentGroup; onAction: (c: Commis
         <div className="flex items-center gap-3">
           <Icon className="h-4 w-4 text-slate-500" />
           <span className="font-semibold text-slate-900">{group.agent_name}</span>
-          <span className="text-xs text-slate-500">{group.commissions.length} venta{group.commissions.length !== 1 ? 's' : ''}</span>
+          <span className="text-xs text-slate-500">{group.commissions.length} movimiento{group.commissions.length !== 1 ? 's' : ''}</span>
         </div>
         <span className="text-base font-bold text-amber-700">{fmt(group.total_pending)}</span>
       </button>
 
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-white px-4 py-3">
+        <p className="text-xs text-slate-500">{group.total_pending < 0 ? 'Saldo a favor de la agencia; se descontará de futuras comisiones.' : 'Saldo neto con todos los ajustes pendientes.'}</p>
+        <button onClick={onSettle} className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white">{group.total_pending < 0 ? 'Registrar devolución' : group.total_pending === 0 ? 'Compensar saldo' : 'Liquidar saldo'}</button>
+      </div>
       {open && (
         <div className="divide-y divide-slate-100">
           {group.commissions.map(c => (
@@ -264,7 +298,7 @@ function AgentRow({ group, onAction }: { group: AgentGroup; onAction: (c: Commis
                     <span className="text-xs font-mono text-slate-500">{c.property_reference}</span>
                   )}
                   <span className="text-sm font-semibold text-slate-800 truncate">{c.property_title ?? '—'}</span>
-                  {statusBadge(c.status)}
+                  {statusBadge(c.status)}{c.kind === 'ADJUSTMENT' && <span className="text-xs text-amber-700">Ajuste</span>}
                 </div>
                 <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap gap-3">
                   <span>Venta: {fmtDate(c.sale_date)}</span>
@@ -282,10 +316,7 @@ function AgentRow({ group, onAction }: { group: AgentGroup; onAction: (c: Commis
                         <FileText className="h-3.5 w-3.5" />Facturar
                       </button>
                     )}
-                    <button onClick={() => onAction(c, 'pay')}
-                      className="flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 transition-colors">
-                      <CheckCircle className="h-3.5 w-3.5" />Pagar
-                    </button>
+
                   </div>
                 )}
               </div>
@@ -311,7 +342,7 @@ export default function Commissions() {
   const [histPage, setHistPage] = useState(1);
   const [histPages, setHistPages] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [modal, setModal] = useState<{ commission: CommissionItem; mode: 'pay' | 'invoice' } | null>(null);
+  const [modal, setModal] = useState<{ commission?: CommissionItem; group?: AgentGroup; mode: 'pay' | 'invoice' } | null>(null);
 
   const periods = periodOptions();
 
@@ -392,9 +423,9 @@ export default function Commissions() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[
             { label: 'Total devengado', value: summary.total, count: summary.count_total, icon: Euro, color: 'text-slate-600', bg: 'bg-slate-50', border: 'border-slate-200' },
-            { label: 'Pendiente de pago', value: summary.pending, count: summary.count_pending, icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-200' },
+            { label: 'Pendiente sin facturar', value: summary.pending, count: summary.count_pending, icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-200' },
             { label: 'Facturado', value: summary.invoiced, count: summary.count_invoiced, icon: FileText, color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-200' },
-            { label: 'Pagado', value: summary.paid, count: summary.count_paid, icon: CheckCircle, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-200' },
+            { label: 'Liquidado neto', value: summary.paid, count: summary.count_paid, icon: CheckCircle, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-200' },
           ].map(({ label, value, count, icon: Icon, color, bg, border }) => (
             <div key={label} className={`rounded-xl border ${border} ${bg} p-4`}>
               <div className="flex items-center gap-2 mb-2">
@@ -402,7 +433,7 @@ export default function Commissions() {
                 <span className="text-xs font-semibold text-slate-600">{label}</span>
               </div>
               <p className={`text-xl font-bold ${color}`}>{fmt(value)}</p>
-              <p className="text-xs text-slate-500 mt-0.5">{count} comisión{count !== 1 ? 'es' : ''}</p>
+              <p className="text-xs text-slate-500 mt-0.5">{count} movimiento{count !== 1 ? 's' : ''}</p>
             </div>
           ))}
         </div>
@@ -410,7 +441,7 @@ export default function Commissions() {
 
       {/* Tabs */}
       <div className="border-b border-slate-200 flex gap-6">
-        {([['pending', 'Por cobrar'], ['history', 'Historial']] as const).map(([key, label]) => (
+        {([['pending', 'Saldos pendientes'], ['history', 'Historial']] as const).map(([key, label]) => (
           <button key={key} onClick={() => setTab(key)}
             className={`pb-3 text-sm font-semibold border-b-2 transition-colors ${
               tab === key ? 'border-indigo-600 text-indigo-700' : 'border-transparent text-slate-500 hover:text-slate-700'
@@ -431,7 +462,7 @@ export default function Commissions() {
             </div>
           ) : pendingGroups.map(group => (
             <AgentRow key={group.agent_id} group={group}
-              onAction={(c, mode) => setModal({ commission: c, mode })} />
+              onAction={(c, mode) => setModal({ commission: c, mode })} onSettle={() => setModal({ group, mode: 'pay' })} />
           ))}
         </div>
       )}
@@ -477,7 +508,7 @@ export default function Commissions() {
                     <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{fmtDate(c.sale_date)}</td>
                     <td className="px-4 py-3 text-slate-700 whitespace-nowrap">{fmt(c.sale_price)}</td>
                     <td className="px-4 py-3 font-semibold text-indigo-700 whitespace-nowrap">{fmt(c.amount)}</td>
-                    <td className="px-4 py-3">{statusBadge(c.status)}</td>
+                    <td className="px-4 py-3">{statusBadge(c.status)}{c.kind === 'ADJUSTMENT' && <p className="text-xs text-amber-700">Ajuste</p>}{c.settlement_amount != null && <p className="mt-1 text-xs text-slate-500" title={c.settlement_notes ?? undefined}>Liquidación neta: {fmt(c.settlement_amount)}</p>}</td>
                     <td className="px-4 py-3 text-slate-600 font-mono text-xs">{c.invoice_number ?? '—'}</td>
                     <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{fmtDate(c.payment_date)}</td>
                     <td className="px-4 py-3">
@@ -487,8 +518,8 @@ export default function Commissions() {
                             <button onClick={() => setModal({ commission: c, mode: 'invoice' })}
                               className="text-xs text-blue-600 hover:underline">Facturar</button>
                           )}
-                          <button onClick={() => setModal({ commission: c, mode: 'pay' })}
-                            className="text-xs text-emerald-600 hover:underline ml-2">Pagar</button>
+                          <button onClick={() => setTab('pending')}
+                            className="text-xs text-emerald-600 hover:underline ml-2">Ver saldo</button>
                         </div>
                       )}
                     </td>
@@ -519,9 +550,10 @@ export default function Commissions() {
       {modal && (
         <ActionModal
           mode={modal.mode}
-          commissionId={modal.commission.sale_id}
-          agentName={modal.commission.agent_name}
-          amount={modal.commission.amount}
+          commissionId={modal.group?.agent_id ?? modal.commission!.id}
+          balanceToken={modal.group?.balance_token}
+          agentName={modal.group?.agent_name ?? modal.commission!.agent_name}
+          amount={modal.group?.total_pending ?? modal.commission!.amount}
           onClose={() => setModal(null)}
           onSuccess={onModalSuccess}
         />

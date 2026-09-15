@@ -3,8 +3,12 @@ import { Search, Home, User, Calendar } from 'lucide-react';
 import client from '../../api/client';
 import { useAuth } from '../../hooks/useAuth';
 import Pagination from '../../components/Pagination';
+import NewSaleButton from '../../components/NewSaleButton';
+import SaleHistoryModal from '../../components/SaleHistoryModal';
 
 interface SaleData {
+  is_active: boolean;
+  version: number;
   id: string;
   property_id: string;
   property_title: string | null;
@@ -37,12 +41,14 @@ export default function Sales() {
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [stateFilter, setStateFilter] = useState('active');
+  const [selectedSale, setSelectedSale] = useState<string | null>(null);
   const [agentFilter, setAgentFilter] = useState('ALL');
 
   const fetchSales = async (p = page, agentId = agentFilter) => {
     try {
       setLoading(true);
-      const params: Record<string, any> = { page: p, limit: LIMIT };
+      const params: Record<string, any> = { page: p, limit: LIMIT, state: stateFilter };
       if (agentId !== 'ALL') params.agent_id = agentId;
       const r = await client.get('/properties/sales/list', { params });
       setSales(r.data.items);
@@ -54,7 +60,7 @@ export default function Sales() {
 
   useEffect(() => {
     fetchSales(page, agentFilter);
-  }, [page, agentFilter]);
+  }, [page, agentFilter, stateFilter]);
 
   useEffect(() => {
     if (isManager) {
@@ -77,22 +83,26 @@ export default function Sales() {
     );
   });
 
-  const totalVolume = filtered.reduce((sum, s) => sum + s.sale_price, 0);
-  const totalAgentComm = filtered.reduce((sum, s) => sum + s.agent_commission, 0);
-  const totalAgencyComm = filtered.reduce((sum, s) => sum + s.agency_commission, 0);
+  const totalVolume = filtered.filter(s => s.is_active).reduce((sum, s) => sum + s.sale_price, 0);
+  const totalAgentComm = filtered.filter(s => s.is_active).reduce((sum, s) => sum + s.agent_commission, 0);
+  const totalAgencyComm = filtered.filter(s => s.is_active).reduce((sum, s) => sum + s.agency_commission, 0);
 
   return (
     <div className="p-8 space-y-6">
-      <div>
-        <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">Ventas</h1>
-        <p className="text-slate-500 mt-1">Historial de ventas y desglose de comisiones.</p>
+      {selectedSale && <SaleHistoryModal saleId={selectedSale} onClose={() => setSelectedSale(null)} onChanged={() => fetchSales(page, agentFilter)} />}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">Ventas</h1>
+          <p className="text-slate-500 mt-1">Historial de ventas y desglose de comisiones.</p>
+        </div>
+        <NewSaleButton onSold={() => fetchSales(page, agentFilter)} />
       </div>
 
       {/* Summary Cards */}
       {!loading && total > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="bg-white rounded-xl p-4 ring-1 ring-slate-900/5 shadow-sm">
-            <p className="text-xs font-semibold text-slate-500 uppercase">Total Ventas</p>
+            <p className="text-xs font-semibold text-slate-500 uppercase">Registros</p>
             <p className="text-2xl font-bold text-slate-900 mt-1">{total}</p>
           </div>
           <div className="bg-white rounded-xl p-4 ring-1 ring-slate-900/5 shadow-sm">
@@ -119,6 +129,9 @@ export default function Sales() {
               value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2 border-0 ring-1 ring-inset ring-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-inset focus:ring-indigo-600 bg-white" />
           </div>
+          <select aria-label="Estado de venta" value={stateFilter} onChange={e => { setStateFilter(e.target.value); setPage(1); }} className="rounded-lg border p-2 text-sm">
+            <option value="active">Ventas activas</option><option value="reopened">Ventas reabiertas</option><option value="all">Todo el historial</option>
+          </select>
           {isManager && agents.length > 0 && (
             <select value={agentFilter} onChange={e => { setAgentFilter(e.target.value); setPage(1); }}
               className="rounded-lg border-0 py-2 px-3 text-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-indigo-600 font-medium">
@@ -146,6 +159,7 @@ export default function Sales() {
                   <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase">Agente</th>
                   <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase">Agencia</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Fecha</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Estado / Acciones</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-slate-200">
@@ -178,6 +192,7 @@ export default function Sales() {
                         {s.sale_date ? new Date(s.sale_date).toLocaleDateString('es-ES') : '—'}
                       </span>
                     </td>
+                    <td className="px-4 py-4 text-sm"><p>{s.is_active ? 'Activa' : 'Reabierta'}</p><button className="mt-1 text-indigo-700 underline" onClick={() => setSelectedSale(s.id)}>Ver / gestionar</button></td>
                   </tr>
                 ))}
               </tbody>

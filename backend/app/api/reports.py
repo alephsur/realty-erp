@@ -123,7 +123,7 @@ def kpi_summary(
 
     def sales_in_range(s: datetime, e: datetime):
         return db.query(Sale).filter(
-            Sale.tenant_id == tid,
+            Sale.is_active.is_(True), Sale.tenant_id == tid,
             Sale.sale_date >= s,
             Sale.sale_date <= e,
         ).all()
@@ -247,7 +247,7 @@ def sales_by_period(
             func.sum(Sale.agency_commission).label("agency_commission"),
             func.sum(Sale.agent_commission).label("agent_commission"),
         )
-        .filter(Sale.tenant_id == tid, Sale.sale_date >= cutoff)
+        .filter(Sale.is_active.is_(True), Sale.tenant_id == tid, Sale.sale_date >= cutoff)
         .group_by("year", "month")
         .order_by("year", "month")
         .all()
@@ -296,7 +296,7 @@ def agent_performance(
     # 1. Collect IDs of users who have at least one sale in this tenant (any role, any period)
     seller_ids_rows = (
         db.query(Sale.agent_id)
-        .filter(Sale.tenant_id == tid, Sale.agent_id.isnot(None))
+        .filter(Sale.is_active.is_(True), Sale.tenant_id == tid, Sale.agent_id.isnot(None))
         .distinct()
         .all()
     )
@@ -321,7 +321,7 @@ def agent_performance(
     for agent in agents:
         # Sales in period
         agent_sales = db.query(Sale).filter(
-            Sale.tenant_id == tid,
+            Sale.is_active.is_(True), Sale.tenant_id == tid,
             Sale.agent_id == agent.id,
             Sale.sale_date >= start,
             Sale.sale_date <= end,
@@ -382,7 +382,7 @@ def agent_performance(
 
     # Show unassigned sales (agent_id IS NULL) as a special row so they are never silent
     unassigned_sales = db.query(Sale).filter(
-        Sale.tenant_id == tid,
+        Sale.is_active.is_(True), Sale.tenant_id == tid,
         Sale.agent_id.is_(None),
         Sale.sale_date >= start,
         Sale.sale_date <= end,
@@ -553,7 +553,7 @@ def commission_summary(
             func.sum(Sale.total_commission).label("total"),
             func.count(Sale.id).label("sales"),
         )
-        .filter(Sale.tenant_id == tid, Sale.sale_date >= start, Sale.sale_date <= end)
+        .filter(Sale.is_active.is_(True), Sale.tenant_id == tid, Sale.sale_date >= start, Sale.sale_date <= end)
         .group_by("year", "quarter")
         .order_by("year", "quarter")
         .all()
@@ -699,7 +699,7 @@ def top_sales(
             joinedload(Sale.agent),
             joinedload(Sale.buyer),
         )
-        .filter(Sale.tenant_id == tid, Sale.sale_date >= start, Sale.sale_date <= end)
+        .filter(Sale.is_active.is_(True), Sale.tenant_id == tid, Sale.sale_date >= start, Sale.sale_date <= end)
         .order_by(Sale.sale_price.desc())
         .limit(limit)
         .all()
@@ -795,7 +795,7 @@ def agent_evolution(
     # All users who have at least one sale or visit in the window
     sale_agent_q = (
         db.query(Sale.agent_id)
-        .filter(Sale.tenant_id == tid, Sale.agent_id.isnot(None), Sale.sale_date >= cutoff)
+        .filter(Sale.is_active.is_(True), Sale.tenant_id == tid, Sale.agent_id.isnot(None), Sale.sale_date >= cutoff)
         .distinct()
     )
     visit_agent_q = (
@@ -834,7 +834,7 @@ def agent_evolution(
             func.sum(Sale.agent_commission).label("comm"),
         )
         .filter(
-            Sale.tenant_id == tid,
+            Sale.is_active.is_(True), Sale.tenant_id == tid,
             Sale.agent_id.in_(list(candidate_ids)),
             Sale.sale_date >= cutoff,
         )

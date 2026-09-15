@@ -4,13 +4,17 @@ from sqlalchemy import func as sqla_func, case
 from pydantic import BaseModel
 from typing import Optional, List
 import logging
+from uuid import UUID
+from sqlalchemy.exc import IntegrityError
+from app.schemas.sale import SellPropertyRequest
+from app.services.sales import accessible_property, buyer_query, seller_query, close_sale
+from app.core.csrf import verify_csrf_token
 
 from app.database import get_db
 from app.models.auth import User, RoleEnum
 from app.models.properties import Property, PropertyStatus, PropertyType
 from app.models.transactions import Sale
 from app.models.crm import Client
-from app.models.commissions import CommissionPayment, CommissionStatus
 from app.api.dependencies import get_current_user
 from app.schemas import PropertyRead, SaleRead, AgentRankingRead
 
@@ -70,14 +74,6 @@ class BulkAssignRequest(BaseModel):
     agent_id: Optional[str] = None
     agent_commission_rate: Optional[float] = None
 
-class SellPropertyRequest(BaseModel):
-    sale_price: float
-    buyer_id: Optional[str] = None
-    agent_commission_rate: Optional[float] = None  # Override agent's default rate
-    agent_id: Optional[str] = None  # Override: explicitly assign the sale to this agent
-    notes: Optional[str] = None
-
-
 # ==========================================
 # STATS ENDPOINTS
 # ==========================================
@@ -93,7 +89,7 @@ def dashboard_stats(db: Session = Depends(get_db), current_user: User = Depends(
     sold_properties = db.query(Property).filter(Property.tenant_id == tid, Property.status == PropertyStatus.VENDIDA).count()
     total_agents = db.query(User).filter(User.tenant_id == tid, User.role == RoleEnum.AGENT).count()
 
-    sales = db.query(Sale).filter(Sale.tenant_id == tid).all()
+    sales = db.query(Sale).filter(Sale.is_active.is_(True), Sale.tenant_id == tid).all()
     total_revenue = sum(s.total_commission for s in sales)
 
     unassigned_properties = db.query(Property).filter(
@@ -133,7 +129,7 @@ def agent_summary_stats(db: Session = Depends(get_db), current_user: User = Depe
         Property.status == PropertyStatus.VENDIDA
     ).count()
 
-    my_sales = db.query(Sale).filter(Sale.tenant_id == tid, Sale.agent_id == uid).all()
+    my_sales = db.query(Sale).filter(Sale.is_active.is_(True), Sale.tenant_id == tid, Sale.agent_id == uid).all()
     total_commission = sum(s.agent_commission for s in my_sales)
     total_volume = sum(s.sale_price for s in my_sales)
 
@@ -165,7 +161,7 @@ def agent_ranking(db: Session = Depends(get_db), current_user: User = Depends(ge
             Property.status != PropertyStatus.VENDIDA, Property.status != PropertyStatus.RETIRADA
         ).count()
 
-        agent_sales = db.query(Sale).filter(Sale.tenant_id == tid, Sale.agent_id == agent.id).all()
+        agent_sales = db.query(Sale).filter(Sale.is_active.is_(True), Sale.tenant_id == tid, Sale.agent_id == agent.id).all()
         total_sales = len(agent_sales)
         total_commission = sum(s.agent_commission for s in agent_sales)
         total_volume = sum(s.sale_price for s in agent_sales)
@@ -192,6 +188,7 @@ def agent_ranking(db: Session = Depends(get_db), current_user: User = Depends(ge
 @router.get("")
 def list_properties(
     search: Optional[str] = Query(None),
+    for_sale: bool = Query(False),
     status_filter: Optional[str] = Query(None, alias="status"),
     page: int = Query(1, ge=1),
     limit: int = Query(25, ge=1, le=200),
@@ -208,6 +205,9 @@ def list_properties(
     )
     if current_user.role == RoleEnum.AGENT:
         base_q = base_q.filter(Property.agent_id == current_user.id)
+
+    if for_sale:
+        base_q = base_q.filter(Property.status != PropertyStatus.VENDIDA)
 
     if search:
         term = f"%{search}%"
@@ -303,6 +303,8 @@ def get_property(property_id: str, db: Session = Depends(get_db), current_user: 
     )
     if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
+    if current_user.role == RoleEnum.AGENT and prop.agent_id != current_user.id:
+        raise HTTPException(404, "Propiedad no encontrada o no asignada a ti.")
     return prop
 
 
@@ -368,11 +370,19 @@ def update_property(property_id: str, data: PropertyUpdate, db: Session = Depend
     if current_user.role not in [RoleEnum.ADMIN, RoleEnum.MANAGER]:
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
-    prop = db.query(Property).filter(Property.id == property_id, Property.tenant_id == current_user.tenant_id).first()
+    prop = db.query(Property).filter(Property.id == property_id, Property.tenant_id == current_user.tenant_id).with_for_update().populate_existing().first()
     if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
 
     update_data = data.model_dump(exclude_unset=True)
+    if "status" in update_data:
+        if update_data["status"] is None:
+            raise HTTPException(422, "El estado no puede estar vacío.")
+        if update_data["status"] != prop.status:
+            if update_data["status"] == PropertyStatus.VENDIDA:
+                raise HTTPException(409, "Utiliza Registrar venta para completar los datos del cierre.")
+            if prop.status == PropertyStatus.VENDIDA:
+                raise HTTPException(409, "Una venta cerrada requiere una reapertura con trazabilidad.")
     if "status" in update_data and update_data["status"] != prop.status:
         from datetime import datetime, timezone
         update_data["status_changed_at"] = datetime.now(timezone.utc)
@@ -454,90 +464,90 @@ def bulk_assign_properties(data: BulkAssignRequest, db: Session = Depends(get_db
 # SELL + SALES ENDPOINTS
 # ==========================================
 
-@router.post("/{property_id}/sell")
-def sell_property(property_id: str, data: SellPropertyRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    if current_user.role not in [RoleEnum.ADMIN, RoleEnum.MANAGER]:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
-
-    prop = (
-        db.query(Property)
-        .options(joinedload(Property.agent))
-        .filter(Property.id == property_id, Property.tenant_id == current_user.tenant_id)
-        .first()
-    )
-    if not prop:
-        raise HTTPException(status_code=404, detail="Property not found")
-
-    if prop.status == PropertyStatus.VENDIDA:
-        raise HTTPException(status_code=400, detail="Property is already sold")
-
-    total_commission = data.sale_price * (prop.commission_rate / 100)
-
-    agent_rate = data.agent_commission_rate
-    if agent_rate is None:
-        agent_rate = prop.agent_commission_rate
-    if agent_rate is None and prop.agent:
-        agent_rate = prop.agent.commission_rate or 0.0
-    agent_rate = agent_rate or 0.0
-
-    agent_commission = total_commission * (agent_rate / 100)
-    agency_commission = total_commission - agent_commission
-
-    sale_agent_id = data.agent_id or prop.agent_id or current_user.id
-
-    sale = Sale(
-        tenant_id=current_user.tenant_id,
-        property_id=prop.id,
-        agent_id=sale_agent_id,
-        buyer_id=data.buyer_id if data.buyer_id else None,
-        sale_price=data.sale_price,
-        total_commission=total_commission,
-        agent_commission=agent_commission,
-        agency_commission=agency_commission,
-        notes=data.notes,
-    )
-    db.add(sale)
-    db.flush()  # get sale.id before creating the payment
-
-    commission_payment = CommissionPayment(
-        tenant_id=current_user.tenant_id,
-        sale_id=sale.id,
-        agent_id=sale_agent_id,
-        amount=agent_commission,
-        status=CommissionStatus.PENDING,
-    )
-    db.add(commission_payment)
-    prop.status = PropertyStatus.VENDIDA
-    db.commit()
-
-    # Notify managers about the new sale (best-effort)
-    try:
-        from app.api.notifications import push_to_managers
-        agent_name = prop.agent.full_name if prop.agent else "Sin agente"
-        push_to_managers(
-            db,
-            tenant_id=current_user.tenant_id,
-            type="SALE_REGISTERED",
-            title="Nueva venta registrada",
-            body=f"'{prop.title}' vendida por {data.sale_price:,.0f} € — comisión total {total_commission:,.0f} €. Agente: {agent_name}.",
-            entity_type="property",
-            entity_id=str(prop.id),
+@router.get("/{property_id}/closing-options")
+def closing_options(
+    property_id: UUID,
+    search: str = Query("", max_length=200),
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    prop = accessible_property(db, property_id, current_user)
+    buyers = buyer_query(db, current_user)
+    if search:
+        term = f"%{search}%"
+        buyers = buyers.filter(
+            (Client.first_name + " " + Client.last_name).ilike(term)
         )
-        db.commit()
-    except Exception:
-        logger.warning("Failed to send sale notification", exc_info=True)
-
+    total = buyers.count()
+    items = buyers.order_by(Client.first_name, Client.last_name, Client.id).offset(
+        (page - 1) * limit
+    ).limit(limit).all()
     return {
-        "message": "Sale registered",
-        "sale_price": data.sale_price,
-        "total_commission": round(total_commission, 2),
-        "agent_commission": round(agent_commission, 2),
-        "agency_commission": round(agency_commission, 2),
+        "property": PropertyRead.model_validate(prop),
+        "agents": [
+            {"id": str(agent.id), "full_name": agent.full_name,
+             "commission_rate": agent.commission_rate}
+            for agent in seller_query(db, current_user).order_by(User.full_name).all()
+        ],
+        "buyers": [
+            {"id": str(buyer.id), "full_name": f"{buyer.first_name} {buyer.last_name}"}
+            for buyer in items
+        ],
+        "pages": max(1, -(-total // limit)),
+        "total": total,
     }
+
+
+@router.post("/{property_id}/sell", dependencies=[Depends(verify_csrf_token)])
+def sell_property(
+    property_id: UUID,
+    data: SellPropertyRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        sale, created = close_sale(db, property_id, data, current_user)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if getattr(getattr(exc.orig, "diag", None), "constraint_name", None) == "uq_sales_tenant_closing_request":
+            raise HTTPException(409, "Este intento de cierre ya se usó en otra venta.") from exc
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+    result = {
+        "message": "Venta registrada" if created else "Venta ya registrada",
+        "sale_id": str(sale.id),
+        "replayed": not created,
+        "sale_price": float(sale.sale_price),
+        "total_commission": float(sale.total_commission),
+        "agent_commission": float(sale.agent_commission),
+        "agency_commission": float(sale.agency_commission),
+    }
+    if created:
+        # Only the successful first closure emits notifications.
+        try:
+            from app.api.notifications import push_to_managers
+            push_to_managers(
+                db, tenant_id=current_user.tenant_id, type="SALE_REGISTERED",
+                title="Nueva venta registrada",
+                body=f"'{sale.property.title}' vendida por {sale.sale_price:,.2f} €.",
+                entity_type="property", entity_id=str(sale.property_id),
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.warning("Failed to send sale notification", exc_info=True)
+    return result
 
 
 @router.get("/sales/list")
 def list_sales(
+    state: str = Query("active", pattern="^(active|reopened|all)$"),
     agent_id: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(25, ge=1, le=200),
@@ -558,8 +568,10 @@ def list_sales(
         .filter(Sale.tenant_id == current_user.tenant_id)
     )
 
+    if state != "all":
+        query = query.filter(Sale.is_active.is_(state == "active"))
     if current_user.role == RoleEnum.AGENT:
-        query = query.filter(Sale.agent_id == current_user.id)
+        query = query.join(Property, Sale.property_id == Property.id).filter(Property.agent_id == current_user.id)
     elif agent_id:
         query = query.filter(Sale.agent_id == agent_id)
 

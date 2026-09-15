@@ -1,6 +1,6 @@
 # Roadmap de producto — Realty ERP
 
-Fecha: 14 de septiembre de 2026. Actualización: 15 de septiembre de 2026. Estado: F0-01 implementada y verificada; el resto del roadmap sigue pendiente.
+Fecha: 14 de septiembre de 2026. Actualización: 15 de septiembre de 2026. Estado: F0-01 completada; F0-02 implementada con pruebas automatizadas; el resto del roadmap sigue pendiente.
 
 ## Objetivo de producto
 
@@ -51,6 +51,23 @@ Verificados el arranque de la API, registro e inicio de sesión con datos de pru
 las diez migraciones desde una base PostgreSQL 15 vacía y su repetición sin cambios.
 Incluye dos pruebas de configuración y arranque; la cobertura comercial de F0-06
 sigue pendiente. Las comprobaciones usaron bases aisladas, sin modificar datos existentes.
+
+**F0-02 implementada (15/09/2026):** formulario y operación de cierre comunes desde
+Propiedades, tablero y Ventas; comprador, precio, agente y comisiones obligatorios;
+acceso del agente asignado y de responsables de la agencia; transacción única,
+reintentos y cierres concurrentes comprobados con PostgreSQL. Incluye importes
+decimales, conservación de datos históricos e inventario de inconsistencias.
+Las entradas de la interfaz se verifican con un DOM simulado; la inspección visual
+en navegador real queda pendiente. Ver [reglas y validación de F0-02](docs/F0-02.md).
+
+**F0-03 implementada (15/09/2026):** corrección y reapertura explícitas desde Ventas,
+con motivo, versiones e historial. Las comisiones se corrigen o descuentan mediante
+ajustes, conservando los pagos y facturas previos; la liquidación del agente incluye
+todos los descuentos pendientes. Los cierres reabiertos dejan de contar en los
+indicadores. Incluye pruebas de permisos, reintentos, concurrencia y coherencia
+económica; migración probada en bases aisladas y aplicada a la instalación,
+según confirmación del usuario.
+Verificadas las pantallas en Chrome con datos ficticios. Ver [F0-03](docs/F0-03.md).
 
 Trabajo de producto asociado: observar el flujo de una captación, una visita y un cierre en las agencias piloto; acordar un glosario de estados y registrar una línea base de seguimiento. Inventariar los datos existentes antes de modificar el modelo.
 

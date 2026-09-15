@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { AlertTriangle, Clock, User, Tag } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import client from '../../api/client';
+import SellPropertyModal from '../../components/SellPropertyModal';
 
 interface PropertyData {
   id: string;
@@ -11,6 +12,7 @@ interface PropertyData {
   address: string;
   reference: string | null;
   agent_name: string | null;
+  agent_id: string | null;
   status_changed_at: string | null;
   created_at: string | null;
 }
@@ -41,8 +43,12 @@ export default function PropertyKanban() {
   const [error, setError] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overColumn, setOverColumn] = useState<string | null>(null);
+  const [sellModal, setSellModal] = useState<string | null>(null);
+  const [actionError, setActionError] = useState('');
 
   const isManager = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+  const canSell = (prop: PropertyData) => prop.status_key !== 'VENDIDA' &&
+    (isManager || (user?.role === 'AGENT' && prop.agent_id === user.id));
 
   const fetchProperties = useCallback(async () => {
     setLoading(true);
@@ -90,10 +96,16 @@ export default function PropertyKanban() {
     const id = draggingId;
     setDraggingId(null);
     setOverColumn(null);
-    if (!id || !isManager) return;
+    if (!id) return;
 
     const prop = properties.find(p => p.id === id);
-    if (!prop || prop.status_key === colKey) return;
+    if (!prop || !canSell(prop) || prop.status_key === colKey) return;
+    setActionError('');
+    if (colKey === 'VENDIDA') { setSellModal(id); return; }
+    if (!isManager) {
+      setActionError('Puedes registrar la venta de tus propiedades desde la columna Vendida.');
+      return;
+    }
 
     // Optimistic update
     const now = new Date().toISOString();
@@ -105,6 +117,7 @@ export default function PropertyKanban() {
       await client.put(`/properties/${id}`, { status: colKey });
     } catch {
       // Revert on failure
+      setActionError('No se pudo cambiar el estado de la propiedad.');
       fetchProperties();
     }
   };
@@ -134,6 +147,10 @@ export default function PropertyKanban() {
 
   return (
     <div className="p-6 min-h-full">
+      {sellModal && <SellPropertyModal key={sellModal} propertyId={sellModal}
+        onClose={() => setSellModal(null)}
+        onSold={() => { setSellModal(null); fetchProperties(); }} />}
+      {actionError && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{actionError}</p>}
       {/* Page header */}
       <div className="mb-6 flex items-start justify-between">
         <div>
@@ -141,7 +158,7 @@ export default function PropertyKanban() {
           <p className="text-sm text-slate-500 mt-1">
             {isManager
               ? 'Arrastra las tarjetas entre columnas para cambiar el estado.'
-              : 'Vista del pipeline de propiedades.'}
+              : 'Arrastra una de tus propiedades a Vendida o pulsa Registrar venta.'}
           </p>
         </div>
         {totalStuck > 0 && (
@@ -164,8 +181,8 @@ export default function PropertyKanban() {
               className={`flex-shrink-0 w-72 rounded-xl border bg-slate-50 flex flex-col transition-all ${
                 isOver ? 'ring-2 ring-indigo-400 border-indigo-200' : 'border-slate-200'
               }`}
-              onDragOver={isManager ? e => onDragOver(e, col.key) : undefined}
-              onDrop={isManager ? e => onDrop(e, col.key) : undefined}
+              onDragOver={e => onDragOver(e, col.key)}
+              onDrop={e => onDrop(e, col.key)}
               onDragLeave={() => setOverColumn(null)}
             >
               {/* Column header */}
@@ -186,11 +203,11 @@ export default function PropertyKanban() {
                   return (
                     <div
                       key={prop.id}
-                      draggable={isManager}
-                      onDragStart={isManager ? e => onDragStart(e, prop.id) : undefined}
+                      draggable={canSell(prop)}
+                      onDragStart={canSell(prop) ? e => onDragStart(e, prop.id) : undefined}
                       onDragEnd={onDragEnd}
                       className={`bg-white rounded-lg p-3 border shadow-sm transition-all select-none ${
-                        isManager ? 'cursor-grab active:cursor-grabbing' : ''
+                        canSell(prop) ? 'cursor-grab active:cursor-grabbing' : ''
                       } ${isDragging ? 'opacity-40 scale-95' : 'hover:shadow-md'} ${
                         isStuck ? 'border-red-300' : col.cardBorder
                       }`}
@@ -219,6 +236,11 @@ export default function PropertyKanban() {
 
                       {/* Price */}
                       <p className="text-sm font-bold text-indigo-600 mt-2">{formatPrice(prop.price)}</p>
+
+                      {canSell(prop) && <button type="button" onClick={() => setSellModal(prop.id)}
+                        className="mt-2 rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100">
+                        Registrar venta
+                      </button>}
 
                       {/* Footer: agent + days */}
                       <div className="mt-2 flex items-center justify-between">
