@@ -140,131 +140,181 @@ El backend aplica las siguientes cabeceras de seguridad en todas las respuestas:
 
 ---
 
-## Despliegue con Docker Compose
+## Instalación de desarrollo reproducible (F0-01)
 
-### Requisitos previos
+Las dependencias se instalan desde los archivos versionados `backend/uv.lock` y
+`frontend/package-lock.json`. Usa `uv sync --locked` y `npm ci`; no es necesario
+regenerar estos archivos para arrancar el proyecto.
 
-- Docker ≥ 24 y Docker Compose v2
-- `git`
+### Requisitos
 
-### 1. Clonar el repositorio
+- Docker y Docker Compose v2 o posterior.
+- Para ejecutar fuera de Docker: **Python 3.12**, **uv 0.11.6** y **Node.js 24** con npm.
+- `backend/.python-version` y `frontend/.nvmrc` seleccionan las versiones de Python
+  y Node. `uv` puede descargar Python 3.12 si no está instalado.
+
+Los Dockerfiles y Compose están orientados a desarrollo: montan el código local
+para recarga automática. Las dependencias del backend viven en `/opt/venv` dentro
+del contenedor y no se mezclan con el entorno local `backend/.venv`.
+
+### 1. Configurar el backend
+
+Desde la raíz del repositorio, copia la plantilla **si aún no tienes `.env`**:
 
 ```bash
-git clone <url-del-repositorio>
-cd realty-erp
+cp -n backend/.env.example backend/.env
 ```
 
-### 2. Crear el fichero de variables de entorno
-
-Copia la plantilla y ajusta los valores:
+Genera una clave y guárdala como `SECRET_KEY` en `backend/.env`:
 
 ```bash
-cp backend/.env.example backend/.env   # si existe, o crear desde cero
+# Con Python local:
+python3 -c 'import secrets; print(secrets.token_hex(32))'
+# Alternativa si solo tienes Docker:
+docker run --rm python:3.12-slim python -c 'import secrets; print(secrets.token_hex(32))'
 ```
 
-Contenido mínimo del fichero `backend/.env`:
+La plantilla configura cookies para HTTP local y esta conexión:
 
 ```env
-# OBLIGATORIO — mínimo 32 caracteres
-# Genera una clave con: python -c "import secrets; print(secrets.token_hex(32))"
-SECRET_KEY=cambia_esto_por_una_clave_segura_de_al_menos_32_caracteres
-
-# URL de conexión a la base de datos (en Docker Compose, usa el nombre del servicio)
-DATABASE_URL=postgresql://postgres:postgrespassword@db:5432/realty_erp
-
-# Email del superadmin que se crea en el primer arranque (déjalo vacío tras el primer deploy)
-BOOTSTRAP_SUPERADMIN_EMAIL=admin@tudominio.com
-
-# Orígenes permitidos por CORS (separados por coma)
-CORS_ORIGINS=http://localhost:5173
-
-# En desarrollo local sin HTTPS, cambiar a False
+DATABASE_URL=postgresql://postgres:postgrespassword@localhost:55432/realty_erp
 COOKIE_SECURE=False
 COOKIE_SAMESITE=lax
+CORS_ORIGINS=http://localhost:5173
+FRONTEND_URL=http://localhost:5173
 ```
 
-> **Importante:** Tras el primer arranque, elimina o deja en blanco `BOOTSTRAP_SUPERADMIN_EMAIL` para evitar que el proceso de bootstrap se ejecute en reinicios posteriores. La contraseña temporal aparece en los logs del backend.
+El backend y Alembic leen el mismo `.env` al ejecutarse desde `backend/`.
+Las variables del proceso tienen prioridad. En Docker, Compose carga el archivo
+y sustituye `DATABASE_URL` por la conexión interna `db:5432`.
 
-### 3. Levantar los servicios
+Para crear un superadministrador al arrancar, añade opcionalmente:
+
+```env
+BOOTSTRAP_SUPERADMIN_EMAIL=admin@tudominio.com
+```
+
+### 2. Arrancar con Docker Compose
+
+Desde la raíz, ejecuta en este orden:
 
 ```bash
-docker compose up --build -d
+docker compose config --quiet
+docker compose up -d db
+docker compose build
+docker compose run --rm backend alembic upgrade head
+docker compose up -d backend frontend
 ```
 
-Servicios que se levantan:
+Compose espera a que PostgreSQL esté disponible antes de iniciar el backend.
+Las migraciones se aplican **antes del primer arranque de la aplicación**, para que
+el bootstrap del superadministrador encuentre las tablas. Ejecuta de nuevo
+`docker compose run --rm backend alembic upgrade head` al incorporar migraciones;
+si ya está actualizado, no vuelve a aplicarlas.
 
-| Servicio | Puerto | Descripción |
-|----------|--------|-------------|
-| `db` | — (interno) | PostgreSQL 15 |
-| `backend` | `8000` | API FastAPI |
-| `frontend` | `5173` | SPA React |
+| Servicio | Dirección local |
+|----------|-----------------|
+| Aplicación | `http://localhost:5173` |
+| API y documentación | `http://localhost:8000/docs` |
+| Estado de la API | `http://localhost:8000/health` |
+| PostgreSQL | `localhost:55432` (solo acceso local) |
 
-### 4. Aplicar las migraciones de base de datos
-
-En el primer arranque las tablas no existen todavía. Ejecuta Alembic dentro del contenedor:
+Comprobación básica:
 
 ```bash
-docker compose exec backend alembic upgrade head
+curl --fail http://localhost:8000/health
+docker compose run --rm backend alembic current
 ```
 
-### 5. Reiniciar el backend para el bootstrap del superadmin
+El estado debe devolver `{"status":"ok"}` y Alembic debe indicar `(head)`.
+El estado HTTP comprueba que responde la API; la ejecución de migraciones comprueba
+la conexión y preparación de la base de datos.
 
-Si configuraste `BOOTSTRAP_SUPERADMIN_EMAIL`, el superadmin se crea durante el evento `lifespan` de FastAPI. Si el contenedor arrancó antes de aplicar las migraciones, reinícialo:
+Si activaste el bootstrap, consulta `docker compose logs backend` para obtener la
+contraseña temporal y cámbiala al iniciar sesión. Después elimina
+`BOOTSTRAP_SUPERADMIN_EMAIL` de `.env` y ejecuta `docker compose up -d backend` para
+recrear el servicio con la configuración actualizada.
 
-```bash
-docker compose restart backend
-```
+Los puertos pueden ajustarse mediante `POSTGRES_PORT`, `BACKEND_PORT` y
+`FRONTEND_PORT` al invocar Compose. Si cambias el puerto del frontend, actualiza
+también `CORS_ORIGINS` y `FRONTEND_URL` en `backend/.env`; para un backend local,
+ajusta `DATABASE_URL` si cambias el puerto de PostgreSQL.
 
-Busca en los logs la contraseña temporal:
+### 3. Alternativa: backend y frontend locales
 
-```bash
-docker compose logs backend | grep "SUPERADMIN CREATED"
-```
+Utiliza la misma configuración del paso 1. Puedes arrancar únicamente PostgreSQL
+con `docker compose up -d db`, que publica el puerto local 55432.
 
-La salida tendrá este formato:
-
-```
-==================================================
-SUPERADMIN CREATED — CHANGE PASSWORD IMMEDIATELY
-   Email:    admin@tudominio.com
-   Password: <contraseña-generada>
-   This account requires a password change on first login.
-==================================================
-```
-
-Inicia sesión en `http://localhost:5173` con esas credenciales. El sistema te forzará a cambiar la contraseña antes de continuar.
-
----
-
-## Desarrollo local sin Docker
-
-### Backend
+Backend, desde una terminal:
 
 ```bash
 cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .          # o: uv sync
-
-# Variables de entorno
-export SECRET_KEY="clave-local-de-desarrollo-suficientemente-larga"
-export DATABASE_URL="postgresql://postgres:postgrespassword@localhost:5432/realty_erp"
-export COOKIE_SECURE=False
-export COOKIE_SAMESITE=lax
-
-alembic upgrade head
-uvicorn app.main:app --reload --port 8000
+uv sync --locked
+uv run --locked alembic upgrade head
+uv run --locked uvicorn app.main:app --reload --port 8000
 ```
 
-### Frontend
+Si `.venv` procede de otro equipo o contenedor y su Python ya no existe, consérvalo
+con otro nombre y reconstruye el entorno. No copies entornos virtuales:
+
+```bash
+cd backend
+mv .venv .venv.backup-$(date +%Y%m%d-%H%M%S)
+uv sync --locked
+```
+
+Frontend, desde otra terminal:
 
 ```bash
 cd frontend
-npm install
-# Crea frontend/.env.local con:
-# VITE_API_URL=http://localhost:8000
+nvm use  # si utilizas nvm; en otro caso, usa Node.js 24
+npm ci
 npm run dev
 ```
+
+La API por defecto es `http://localhost:8000`. Solo si necesitas otra dirección,
+crea `frontend/.env.local` con `VITE_API_URL` y reinicia el frontend.
+
+### Verificación de la instalación
+
+```bash
+# Desde frontend/:
+npm ci
+npm run build
+
+# Desde backend/:
+uv sync --locked
+uv run --locked pytest
+uv run --locked alembic upgrade head
+uv run --locked alembic current
+```
+
+Las pruebas de F0-01 verifican la carga de `.env`, la prioridad de las variables del
+proceso y el arranque de la API y su esquema OpenAPI. Se ejecutan con configuración
+temporal y no acceden a la base de datos del desarrollador. Las pruebas completas
+del flujo comercial corresponden a F0-06.
+
+Para verificar las migraciones desde cero sin utilizar los datos habituales,
+arranca un proyecto Compose independiente, desde la raíz:
+
+```bash
+export COMPOSE_PROJECT_NAME=realty-install-check
+export POSTGRES_PORT=55433
+export BACKEND_PORT=18000
+export FRONTEND_PORT=15173
+docker compose up -d db
+docker compose build backend
+docker compose run --rm backend alembic upgrade head
+docker compose run --rm backend alembic current
+docker compose run --rm backend alembic upgrade head
+docker compose down --volumes
+unset COMPOSE_PROJECT_NAME POSTGRES_PORT BACKEND_PORT FRONTEND_PORT
+```
+
+Esta comprobación usa un volumen propio. El último comando de Compose borra
+únicamente los datos desechables de `realty-install-check`; utiliza ese nombre
+solo para pruebas. No ejecutes `down --volumes` sobre un proyecto con datos que
+quieras conservar.
 
 ---
 

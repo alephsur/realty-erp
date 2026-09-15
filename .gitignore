@@ -2,3 +2,9 @@ implementation_plan.md
 backend/.env
 .node_modules
 .venv
+.venv.backup-*
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/

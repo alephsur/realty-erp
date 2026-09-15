@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import client from '../api/client';
-import { Building2, UserPlus, Copy, Check, LogOut, ShieldAlert, Mail, Edit, Trash2, X, Save, Users, ToggleLeft, ToggleRight, ChevronDown, ChevronRight, Send } from 'lucide-react';
+import { Building2, UserPlus, Copy, Check, LogOut, ShieldAlert, Mail, Edit, Trash2, X, Save, ToggleLeft, ToggleRight, ChevronDown, ChevronRight, Send } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 
 interface TenantData {

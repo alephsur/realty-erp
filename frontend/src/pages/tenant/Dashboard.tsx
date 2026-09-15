@@ -1,4 +1,4 @@
-import { Building2, TrendingUp, Users, CheckCircle2, Home, DollarSign, AlertTriangle, Trophy } from 'lucide-react';
+import { Users, CheckCircle2, Home, DollarSign, AlertTriangle, Trophy } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import client from '../../api/client';
 import { useAuth } from '../../hooks/useAuth';

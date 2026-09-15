@@ -1,41 +1,46 @@
-version: "3.8"
-
 services:
   db:
     image: postgres:15-alpine
-    container_name: realty_erp_db
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgrespassword
       POSTGRES_DB: realty_erp
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-55432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d realty_erp"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: realty_erp_backend
+    env_file:
+      - ./backend/.env
     environment:
       - DATABASE_URL=postgresql://postgres:postgrespassword@db:5432/realty_erp
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     volumes:
       - ./backend/:/app/
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     restart: always
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: realty_erp_frontend
     environment:
-      - VITE_API_URL=http://localhost:8000
+      - VITE_API_URL=http://localhost:${BACKEND_PORT:-8000}
     ports:
-      - "5173:5173"
+      - "${FRONTEND_PORT:-5173}:5173"
     volumes:
       - ./frontend/:/app/
       # Exclude node_modules from being overwritten by the host

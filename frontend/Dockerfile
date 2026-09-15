@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:24-alpine
 
 # Set work directory
 WORKDIR /app
@@ -9,7 +9,7 @@ RUN apk add --no-cache bash
 
 # Copy package.json and package-lock.json first to leverage caching
 COPY package*.json ./
-RUN npm install
+RUN npm ci --no-audit --no-fund
 
 # As with the backend, we omit copying the source code since we rely on 
 # docker-compose volume mounts for hot-reloading.

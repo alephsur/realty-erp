@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Edit, Trash2, X, Calendar, Clock, MapPin, User, Home, MessageSquare, Star, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { Plus, Search, Trash2, X, Calendar, Clock, MapPin, User, Home, MessageSquare, Star, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 import client from '../../api/client';
 import { useAuth } from '../../hooks/useAuth';
 import Pagination from '../../components/Pagination';

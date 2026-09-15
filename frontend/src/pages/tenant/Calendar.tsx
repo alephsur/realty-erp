@@ -113,7 +113,7 @@ export default function CalendarPage() {
   const [conflicts, setConflicts] = useState<ConflictWarning[]>([]);
 
   // Create form
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<FormFieldsProps['form']>({
     title: '',
     appointment_type: 'MEETING',
     agent_id: '',
@@ -128,7 +128,7 @@ export default function CalendarPage() {
 
   // Edit mode inside detail modal
   const [editMode, setEditMode] = useState(false);
-  const [editForm, setEditForm] = useState({
+  const [editForm, setEditForm] = useState<FormFieldsProps['form']>({
     title: '',
     appointment_type: '',
     agent_id: '',
@@ -541,7 +541,7 @@ export default function CalendarPage() {
                 <form onSubmit={handleEditSubmit} className="space-y-3">
                   <AppointmentFormFields
                     form={editForm}
-                    setForm={setEditForm as React.Dispatch<React.SetStateAction<typeof editForm>>}
+                    setForm={setEditForm}
                     agents={agents}
                     isManager={isManager}
                     userId={user?.id || ''}
@@ -574,7 +574,7 @@ export default function CalendarPage() {
             <form onSubmit={handleCreateSubmit} className="p-5 space-y-3">
               <AppointmentFormFields
                 form={form}
-                setForm={setForm as React.Dispatch<React.SetStateAction<typeof form>>}
+                setForm={setForm}
                 agents={agents}
                 isManager={isManager}
                 userId={user?.id || ''}

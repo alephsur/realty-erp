@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, type CSSProperties } from 'react';
 import {
   TrendingUp, TrendingDown, Minus, DollarSign, Building2, Users, Home,
   BarChart2, RefreshCw, CalendarDays, Trophy, Star, CheckCircle2, ArrowUpRight,
@@ -465,7 +465,7 @@ function AgentEvolutionSection({
   // Build series only for selected agents
   const activeSeries: LineSeries[] = data
     .filter(a => selectedAgents.has(a.agent_id))
-    .map((a, i) => ({
+    .map(a => ({
       label: a.agent_name,
       color: AGENT_COLORS[data.indexOf(a) % AGENT_COLORS.length],
       values: a.monthly.map(m => m[kpi]),
@@ -561,7 +561,7 @@ function AgentEvolutionSection({
                       ? 'ring-2 bg-slate-50'
                       : 'ring-1 ring-slate-100 opacity-40 hover:opacity-60'
                   }`}
-                  style={{ ringColor: isSelected ? color : undefined }}
+                  style={{ '--tw-ring-color': isSelected ? color : undefined } as CSSProperties}
                 >
                   <span
                     className="h-2.5 w-2.5 rounded-full flex-shrink-0 transition-all"

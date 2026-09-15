@@ -1,11 +1,9 @@
-import os
+from app.core.config import settings
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy import text
 
-SQLALCHEMY_DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql://postgres:postgrespassword@localhost:5432/realty_erp"
-)
+SQLALCHEMY_DATABASE_URL = settings.DATABASE_URL
 
 # We use SQLAlchemy 2.0 with create_engine
 engine = create_engine(SQLALCHEMY_DATABASE_URL, echo=False)

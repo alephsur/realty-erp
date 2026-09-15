@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, DollarSign, Home, User, Calendar, FileText } from 'lucide-react';
+import { Search, Home, User, Calendar } from 'lucide-react';
 import client from '../../api/client';
 import { useAuth } from '../../hooks/useAuth';
 import Pagination from '../../components/Pagination';

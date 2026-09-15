@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     # Generate a strong key with:  python -m secrets (or openssl rand -hex 32)
     # ------------------------------------------------------------------ #
     SECRET_KEY: str  # No default — raises ValidationError at startup if missing
+    DATABASE_URL: str = "postgresql://postgres:postgrespassword@localhost:5432/realty_erp"
 
     # ------------------------------------------------------------------ #
     # Bootstrap superadmin — OPTIONAL.
