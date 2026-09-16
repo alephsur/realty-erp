@@ -69,6 +69,14 @@ económica; migración probada en bases aisladas y aplicada a la instalación,
 según confirmación del usuario.
 Verificadas las pantallas en Chrome con datos ficticios. Ver [F0-03](docs/F0-03.md).
 
+**F0-04 implementada (15/09/2026):** asistencia y conversión visita → cierre con
+fórmulas independientes; ofertas identificadas como no disponibles hasta disponer
+de su registro. Periodos y comparaciones UTC explícitos, series mensuales completas,
+cartera actual separada de actividad y comisiones devengadas diferenciadas de pagos.
+Verificado con 130 pruebas backend, 36 de interfaz, compilación y revisión visual
+en Chrome con datos ficticios. No requiere migración. Ver
+[diccionario y validación de F0-04](docs/F0-04.md).
+
 Trabajo de producto asociado: observar el flujo de una captación, una visita y un cierre en las agencias piloto; acordar un glosario de estados y registrar una línea base de seguimiento. Inventariar los datos existentes antes de modificar el modelo.
 
 **Puerta de salida:** completar el recorrido inmueble → cliente → visita → venta → comisión sin inconsistencias. Acordar el canal de entrada y el portal prioritarios para los pilotos, y comprobar la disponibilidad de integración.

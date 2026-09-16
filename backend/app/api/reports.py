@@ -4,24 +4,32 @@ Reports & Analytics API
 All endpoints are MANAGER/ADMIN only and tenant-scoped.
 Uses raw SQLAlchemy aggregate queries — no ORM lazy loading — for performance.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import joinedload
-from sqlalchemy.orm import Session
-from sqlalchemy import func, case, extract, cast, Float, Integer, and_, text
-from sqlalchemy.dialects.postgresql import UUID
-from typing import Optional
-from datetime import datetime, date, timedelta
-from dateutil.relativedelta import relativedelta
 import logging
+from datetime import datetime
+from typing import Optional
 
-from app.database import get_db
-from app.models.auth import User, RoleEnum
-from app.models.properties import Property, PropertyStatus, PropertyType
-from app.models.transactions import Sale
-from app.models.crm import Client, ClientType
-from app.models.visits import Visit, VisitStatus
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import case, extract, func
+from sqlalchemy.orm import Session, joinedload
+
 from app.api.dependencies import get_current_user
+from app.database import get_db
+from app.models.auth import RoleEnum, User
+from app.models.crm import Client
+from app.models.properties import Property, PropertyStatus
+from app.models.transactions import Sale
+from app.models.visits import Visit, VisitStatus
 from app.schemas import TopSaleRead
+from app.services.metrics import (
+    ReportPeriod,
+    comparison_window,
+    month_keys,
+    month_window,
+    percentage,
+    period_window,
+    utc_now,
+    visit_metrics,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,51 +52,8 @@ def require_manager(current_user: User) -> User:
 # HELPER: build date range
 # ─────────────────────────────────────────────────────────
 
-def _parse_period(period: str) -> tuple[datetime, datetime]:
-    """
-    Returns (start, end) datetimes for named periods.
-    period: 'this_month' | 'last_month' | 'this_quarter' | 'last_quarter'
-            | 'this_year' | 'last_year' | 'last_12_months' | 'all'
-    """
-    now = datetime.utcnow()
-    today = now.date()
-
-    if period == "this_month":
-        start = today.replace(day=1)
-        end = today
-    elif period == "last_month":
-        first_this = today.replace(day=1)
-        last_month_end = first_this - timedelta(days=1)
-        start = last_month_end.replace(day=1)
-        end = last_month_end
-    elif period == "this_quarter":
-        quarter_start_month = ((today.month - 1) // 3) * 3 + 1
-        start = today.replace(month=quarter_start_month, day=1)
-        end = today
-    elif period == "last_quarter":
-        quarter_start_month = ((today.month - 1) // 3) * 3 + 1
-        start_this = today.replace(month=quarter_start_month, day=1)
-        end_last = start_this - timedelta(days=1)
-        lq_start_month = ((end_last.month - 1) // 3) * 3 + 1
-        start = end_last.replace(month=lq_start_month, day=1)
-        end = end_last
-    elif period == "this_year":
-        start = today.replace(month=1, day=1)
-        end = today
-    elif period == "last_year":
-        start = date(today.year - 1, 1, 1)
-        end = date(today.year - 1, 12, 31)
-    elif period == "last_12_months":
-        start = today - relativedelta(months=12)
-        end = today
-    else:  # "all"
-        start = date(2000, 1, 1)
-        end = today
-
-    return (
-        datetime.combine(start, datetime.min.time()),
-        datetime.combine(end, datetime.max.time()),
-    )
+def _parse_period(period: ReportPeriod):
+    return period_window(period)
 
 
 # ─────────────────────────────────────────────────────────
@@ -97,7 +62,7 @@ def _parse_period(period: str) -> tuple[datetime, datetime]:
 
 @router.get("/kpi-summary")
 def kpi_summary(
-    period: str = Query("this_year", description="Period filter"),
+    period: ReportPeriod = Query("this_year", description="Period filter"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -108,32 +73,19 @@ def kpi_summary(
     require_manager(current_user)
     tid = current_user.tenant_id
 
-    period_map = {
-        "this_month": "last_month",
-        "last_month": None,
-        "this_quarter": "last_quarter",
-        "last_quarter": None,
-        "this_year": "last_year",
-        "last_year": None,
-        "last_12_months": None,
-        "all": None,
-    }
-
-    start, end = _parse_period(period)
+    now = utc_now()
+    start, end = period_window(period, now)
+    comparison = comparison_window(period, start, end)
 
     def sales_in_range(s: datetime, e: datetime):
         return db.query(Sale).filter(
             Sale.is_active.is_(True), Sale.tenant_id == tid,
             Sale.sale_date >= s,
-            Sale.sale_date <= e,
+            Sale.sale_date < e,
         ).all()
 
     current_sales = sales_in_range(start, end)
-    prev_period = period_map.get(period)
-    prev_sales = []
-    if prev_period:
-        ps, pe = _parse_period(prev_period)
-        prev_sales = sales_in_range(ps, pe)
+    prev_sales = sales_in_range(*comparison) if comparison else []
 
     def _pct_change(current: float, previous: float) -> Optional[float]:
         if previous == 0:
@@ -152,8 +104,8 @@ def kpi_summary(
     prev_count = len(prev_sales)
 
     # Current period avg ticket
-    avg_ticket = cur_volume / cur_count if cur_count else 0
-    avg_commission_pct = (cur_total_comm / cur_volume * 100) if cur_volume else 0
+    avg_ticket = cur_volume / cur_count if cur_count else None
+    avg_commission_pct = (cur_total_comm / cur_volume * 100) if cur_volume else None
 
     # Portfolio counts
     total_props = db.query(Property).filter(Property.tenant_id == tid).count()
@@ -168,33 +120,21 @@ def kpi_summary(
     ).count()
     total_clients = db.query(Client).filter(Client.tenant_id == tid).count()
     total_agents = db.query(User).filter(
-        User.tenant_id == tid, User.role == RoleEnum.AGENT, User.is_active == True
+        User.tenant_id == tid, User.role == RoleEnum.AGENT, User.is_active.is_(True)
     ).count()
 
-    # Visit conversion rate in period
-    visits_in_period = db.query(Visit).filter(
-        Visit.tenant_id == tid,
-        Visit.scheduled_at >= start,
-        Visit.scheduled_at <= end,
+    visits = visit_metrics(db, tid, start, end)
+    sold_properties_now = db.query(Property).filter(
+        Property.tenant_id == tid, Property.status == PropertyStatus.VENDIDA,
     ).count()
-    completed_visits = db.query(Visit).filter(
-        Visit.tenant_id == tid,
-        Visit.scheduled_at >= start,
-        Visit.scheduled_at <= end,
-        Visit.status == VisitStatus.COMPLETED,
-    ).count()
-    visit_completion_rate = round(completed_visits / visits_in_period * 100, 1) if visits_in_period else 0
-
-    # Sales conversion: completed properties / total properties started
-    sold_in_period = db.query(Property).filter(
-        Property.tenant_id == tid,
-        Property.status == PropertyStatus.VENDIDA,
-    ).count()
-    conversion_rate = round(sold_in_period / total_props * 100, 1) if total_props else 0
 
     return {
         "period": period,
-        "period_start": start.isoformat(),
+        "period_start": start.isoformat() if period != "all" else None,
+        "timezone": "UTC",
+        "snapshot_at": now.isoformat(),
+        "comparison_start": comparison[0].isoformat() if comparison else None,
+        "comparison_end": comparison[1].isoformat() if comparison else None,
         "period_end": end.isoformat(),
         # Revenue
         "sales_count": cur_count,
@@ -204,8 +144,8 @@ def kpi_summary(
         "agency_commission": round(cur_agency_comm, 2),
         "agency_commission_change": _pct_change(cur_agency_comm, prev_agency_comm),
         "agent_commission_total": round(cur_agent_comm, 2),
-        "avg_ticket": round(avg_ticket, 2),
-        "avg_commission_pct": round(avg_commission_pct, 2),
+        "avg_ticket": round(avg_ticket, 2) if avg_ticket is not None else None,
+        "avg_commission_pct": round(avg_commission_pct, 2) if avg_commission_pct is not None else None,
         # Portfolio
         "total_properties": total_props,
         "active_properties": active_props,
@@ -213,8 +153,12 @@ def kpi_summary(
         "total_clients": total_clients,
         "total_agents": total_agents,
         # Operational
-        "visit_completion_rate": visit_completion_rate,
-        "portfolio_conversion_rate": conversion_rate,
+        **visits,
+        "sold_properties_now": sold_properties_now,
+        "sold_portfolio_share": percentage(sold_properties_now, total_props),
+        "visit_to_offer_rate": None,
+        "offer_to_close_rate": None,
+        "offer_metrics_unavailable_reason": "Todavía no se registran ofertas vinculadas a visitas y cierres.",
     }
 
 
@@ -235,19 +179,19 @@ def sales_by_period(
     require_manager(current_user)
     tid = current_user.tenant_id
 
-    cutoff = datetime.utcnow() - relativedelta(months=months)
+    cutoff, observed_until = month_window(months)
 
     rows = (
         db.query(
-            extract("year", Sale.sale_date).label("year"),
-            extract("month", Sale.sale_date).label("month"),
+            extract("year", func.timezone("UTC", Sale.sale_date)).label("year"),
+            extract("month", func.timezone("UTC", Sale.sale_date)).label("month"),
             func.count(Sale.id).label("count"),
             func.sum(Sale.sale_price).label("volume"),
             func.sum(Sale.total_commission).label("total_commission"),
             func.sum(Sale.agency_commission).label("agency_commission"),
             func.sum(Sale.agent_commission).label("agent_commission"),
         )
-        .filter(Sale.is_active.is_(True), Sale.tenant_id == tid, Sale.sale_date >= cutoff)
+        .filter(Sale.is_active.is_(True), Sale.tenant_id == tid, Sale.sale_date >= cutoff, Sale.sale_date < observed_until)
         .group_by("year", "month")
         .order_by("year", "month")
         .all()
@@ -267,7 +211,11 @@ def sales_by_period(
             "agent_commission": round(float(r.agent_commission or 0), 2),
         })
 
-    return result
+    indexed = {item["period"]: item for item in result}
+    return [indexed.get(f"{year}-{month:02d}", {
+        "period": f"{year}-{month:02d}", "year": year, "month": month, "count": 0,
+        "volume": 0, "total_commission": 0, "agency_commission": 0, "agent_commission": 0,
+    }) for year, month in month_keys(cutoff, observed_until)]
 
 
 # ─────────────────────────────────────────────────────────
@@ -276,13 +224,13 @@ def sales_by_period(
 
 @router.get("/agent-performance")
 def agent_performance(
-    period: str = Query("this_year"),
+    period: ReportPeriod = Query("this_year"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
     Per-agent breakdown: sales, volume, commissions, active properties,
-    visits, visit conversion, avg rating. Sorted by sales volume desc.
+    observed visits, attendance, visit-to-close cohorts, period rating. Sorted by sales volume desc.
 
     Agent list is built from:
       - All tenant users who have ANY sale recorded (regardless of role)
@@ -306,16 +254,18 @@ def agent_performance(
     agent_users = db.query(User).filter(
         User.tenant_id == tid,
         User.role == RoleEnum.AGENT,
-        User.is_active == True,
+        User.is_active.is_(True),
     ).all()
     agent_ids = {u.id for u in agent_users}
 
     # 3. Union: fetch User objects for all combined IDs
-    all_ids = seller_ids | agent_ids
-    if not all_ids:
-        return []
+    visit_agent_ids = {row[0] for row in db.query(Visit.agent_id).filter(
+        Visit.tenant_id == tid, Visit.scheduled_at >= start, Visit.scheduled_at < end,
+        Visit.agent_id.isnot(None),
+    ).distinct().all()}
+    all_ids = seller_ids | agent_ids | visit_agent_ids
 
-    agents = db.query(User).filter(User.id.in_(list(all_ids))).all()
+    agents = db.query(User).filter(User.tenant_id == tid, User.id.in_(list(all_ids))).all()
 
     result = []
     for agent in agents:
@@ -324,7 +274,7 @@ def agent_performance(
             Sale.is_active.is_(True), Sale.tenant_id == tid,
             Sale.agent_id == agent.id,
             Sale.sale_date >= start,
-            Sale.sale_date <= end,
+            Sale.sale_date < end,
         ).all()
 
         # Active properties
@@ -334,29 +284,12 @@ def agent_performance(
             Property.status.notin_([PropertyStatus.VENDIDA, PropertyStatus.RETIRADA]),
         ).count()
 
-        # Visits in period
-        visits_q = db.query(Visit).filter(
-            Visit.tenant_id == tid,
-            Visit.agent_id == agent.id,
-            Visit.scheduled_at >= start,
-            Visit.scheduled_at <= end,
-        )
-        total_visits = visits_q.count()
-        completed_visits = visits_q.filter(Visit.status == VisitStatus.COMPLETED).count()
-        no_show = visits_q.filter(Visit.status == VisitStatus.NO_SHOW).count()
-
-        # Avg rating from feedback
-        avg_rating_row = db.query(func.avg(Visit.rating)).filter(
-            Visit.tenant_id == tid,
-            Visit.agent_id == agent.id,
-            Visit.rating.isnot(None),
-        ).scalar()
+        visits = visit_metrics(db, tid, start, end, agent.id)
 
         sale_count = len(agent_sales)
         volume = sum(s.sale_price for s in agent_sales)
         agent_commission = sum(s.agent_commission for s in agent_sales)
-        avg_ticket = volume / sale_count if sale_count else 0
-        visit_conversion = round(completed_visits / total_visits * 100, 1) if total_visits else 0
+        avg_ticket = volume / sale_count if sale_count else None
 
         result.append({
             "agent_id": str(agent.id),
@@ -367,15 +300,11 @@ def agent_performance(
             "sales_count": sale_count,
             "sales_volume": round(volume, 2),
             "agent_commission": round(agent_commission, 2),
-            "avg_ticket": round(avg_ticket, 2),
+            "avg_ticket": round(avg_ticket, 2) if avg_ticket is not None else None,
             # Portfolio
             "active_properties": active_props,
             # Visits
-            "total_visits": total_visits,
-            "completed_visits": completed_visits,
-            "no_show_visits": no_show,
-            "visit_conversion_rate": visit_conversion,
-            "avg_client_rating": round(float(avg_rating_row), 2) if avg_rating_row else None,
+            **visits,
         })
 
     result.sort(key=lambda x: x["sales_volume"], reverse=True)
@@ -385,9 +314,10 @@ def agent_performance(
         Sale.is_active.is_(True), Sale.tenant_id == tid,
         Sale.agent_id.is_(None),
         Sale.sale_date >= start,
-        Sale.sale_date <= end,
+        Sale.sale_date < end,
     ).all()
-    if unassigned_sales:
+    unassigned_visits = visit_metrics(db, tid, start, end, None)
+    if unassigned_sales or unassigned_visits["total_visits"]:
         u_volume = sum(s.sale_price for s in unassigned_sales)
         u_comm = sum(s.agent_commission for s in unassigned_sales)
         result.append({
@@ -398,13 +328,9 @@ def agent_performance(
             "sales_count": len(unassigned_sales),
             "sales_volume": round(u_volume, 2),
             "agent_commission": round(u_comm, 2),
-            "avg_ticket": round(u_volume / len(unassigned_sales), 2),
+            "avg_ticket": round(u_volume / len(unassigned_sales), 2) if unassigned_sales else None,
             "active_properties": 0,
-            "total_visits": 0,
-            "completed_visits": 0,
-            "no_show_visits": 0,
-            "visit_conversion_rate": 0.0,
-            "avg_client_rating": None,
+            **unassigned_visits,
         })
 
     return result
@@ -532,7 +458,7 @@ def property_type_breakdown(
 
 @router.get("/commission-summary")
 def commission_summary(
-    period: str = Query("this_year"),
+    period: ReportPeriod = Query("this_year"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -546,14 +472,14 @@ def commission_summary(
 
     rows = (
         db.query(
-            extract("year", Sale.sale_date).label("year"),
-            extract("quarter", Sale.sale_date).label("quarter"),
+            extract("year", func.timezone("UTC", Sale.sale_date)).label("year"),
+            extract("quarter", func.timezone("UTC", Sale.sale_date)).label("quarter"),
             func.sum(Sale.agency_commission).label("agency"),
             func.sum(Sale.agent_commission).label("agents"),
             func.sum(Sale.total_commission).label("total"),
             func.count(Sale.id).label("sales"),
         )
-        .filter(Sale.is_active.is_(True), Sale.tenant_id == tid, Sale.sale_date >= start, Sale.sale_date <= end)
+        .filter(Sale.is_active.is_(True), Sale.tenant_id == tid, Sale.sale_date >= start, Sale.sale_date < end)
         .group_by("year", "quarter")
         .order_by("year", "quarter")
         .all()
@@ -589,16 +515,16 @@ def visit_analytics(
     """
     require_manager(current_user)
     tid = current_user.tenant_id
-    cutoff = datetime.utcnow() - relativedelta(months=months)
+    cutoff, observed_until = month_window(months)
 
     rows = (
         db.query(
-            extract("year", Visit.scheduled_at).label("year"),
-            extract("month", Visit.scheduled_at).label("month"),
+            extract("year", func.timezone("UTC", Visit.scheduled_at)).label("year"),
+            extract("month", func.timezone("UTC", Visit.scheduled_at)).label("month"),
             Visit.status,
             func.count(Visit.id).label("count"),
         )
-        .filter(Visit.tenant_id == tid, Visit.scheduled_at >= cutoff)
+        .filter(Visit.tenant_id == tid, Visit.scheduled_at >= cutoff, Visit.scheduled_at < observed_until)
         .group_by("year", "month", Visit.status)
         .order_by("year", "month")
         .all()
@@ -618,16 +544,15 @@ def visit_analytics(
         status_key = r.status.value if r.status else "SCHEDULED"
         by_period[key][status_key] = int(r.count)
 
-    # Enrich with completion rate
     result = []
-    for item in sorted(by_period.values(), key=lambda x: (x["year"], x["month"])):
-        total = item["SCHEDULED"] + item["COMPLETED"] + item["CANCELLED"] + item["NO_SHOW"]
-        item["total"] = total
-        item["completion_rate"] = (
-            round(item["COMPLETED"] / total * 100, 1) if total else 0
-        )
+    for year, month in month_keys(cutoff, observed_until):
+        key = f"{year}-{month:02d}"
+        item = by_period.get(key, {"period": key, "year": year, "month": month,
+            "SCHEDULED": 0, "COMPLETED": 0, "CANCELLED": 0, "NO_SHOW": 0})
+        item["total"] = sum(item[state] for state in ("SCHEDULED", "COMPLETED", "CANCELLED", "NO_SHOW"))
+        item["attendance_denominator"] = item["COMPLETED"] + item["NO_SHOW"]
+        item["visit_attendance_rate"] = percentage(item["COMPLETED"], item["attendance_denominator"])
         result.append(item)
-
     return result
 
 
@@ -646,16 +571,16 @@ def client_acquisition(
     """
     require_manager(current_user)
     tid = current_user.tenant_id
-    cutoff = datetime.utcnow() - relativedelta(months=months)
+    cutoff, observed_until = month_window(months)
 
     rows = (
         db.query(
-            extract("year", Client.created_at).label("year"),
-            extract("month", Client.created_at).label("month"),
+            extract("year", func.timezone("UTC", Client.created_at)).label("year"),
+            extract("month", func.timezone("UTC", Client.created_at)).label("month"),
             Client.client_type,
             func.count(Client.id).label("count"),
         )
-        .filter(Client.tenant_id == tid, Client.created_at >= cutoff)
+        .filter(Client.tenant_id == tid, Client.created_at >= cutoff, Client.created_at < observed_until)
         .group_by("year", "month", Client.client_type)
         .order_by("year", "month")
         .all()
@@ -670,7 +595,9 @@ def client_acquisition(
         by_period[key][type_key] = int(r.count)
         by_period[key]["total"] += int(r.count)
 
-    return sorted(by_period.values(), key=lambda x: x["period"])
+    return [by_period.get(f"{year}-{month:02d}", {
+        "period": f"{year}-{month:02d}", "Propietario": 0, "Demandante": 0, "total": 0,
+    }) for year, month in month_keys(cutoff, observed_until)]
 
 
 # ─────────────────────────────────────────────────────────
@@ -679,7 +606,7 @@ def client_acquisition(
 
 @router.get("/top-sales", response_model=list[TopSaleRead])
 def top_sales(
-    period: str = Query("this_year"),
+    period: ReportPeriod = Query("this_year"),
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -699,7 +626,7 @@ def top_sales(
             joinedload(Sale.agent),
             joinedload(Sale.buyer),
         )
-        .filter(Sale.is_active.is_(True), Sale.tenant_id == tid, Sale.sale_date >= start, Sale.sale_date <= end)
+        .filter(Sale.is_active.is_(True), Sale.tenant_id == tid, Sale.sale_date >= start, Sale.sale_date < end)
         .order_by(Sale.sale_price.desc())
         .limit(limit)
         .all()
@@ -772,15 +699,9 @@ def agent_evolution(
     """
     require_manager(current_user)
     tid = current_user.tenant_id
-    cutoff = datetime.utcnow() - relativedelta(months=months)
+    cutoff, observed_until = month_window(months)
 
-    # ── Build the requested month list (fills gaps) ──────
-    now = datetime.utcnow()
-    all_periods: list[tuple[int, int]] = []
-    cursor = cutoff.replace(day=1)
-    while cursor <= now:
-        all_periods.append((cursor.year, cursor.month))
-        cursor += relativedelta(months=1)
+    all_periods = month_keys(cutoff, observed_until)
 
     # ── Resolve which agents to include ─────────────────
     import uuid as _uuid
@@ -790,17 +711,17 @@ def agent_evolution(
         try:
             requested_ids = [_uuid.UUID(aid.strip()) for aid in agent_ids.split(",") if aid.strip()]
         except ValueError:
-            raise HTTPException(status_code=422, detail="Invalid UUID in agent_ids")
+            raise HTTPException(status_code=422, detail="Invalid UUID in agent_ids") from None
 
     # All users who have at least one sale or visit in the window
     sale_agent_q = (
         db.query(Sale.agent_id)
-        .filter(Sale.is_active.is_(True), Sale.tenant_id == tid, Sale.agent_id.isnot(None), Sale.sale_date >= cutoff)
+        .filter(Sale.is_active.is_(True), Sale.tenant_id == tid, Sale.agent_id.isnot(None), Sale.sale_date >= cutoff, Sale.sale_date < observed_until)
         .distinct()
     )
     visit_agent_q = (
         db.query(Visit.agent_id)
-        .filter(Visit.tenant_id == tid, Visit.agent_id.isnot(None), Visit.scheduled_at >= cutoff)
+        .filter(Visit.tenant_id == tid, Visit.agent_id.isnot(None), Visit.scheduled_at >= cutoff, Visit.scheduled_at < observed_until)
         .distinct()
     )
     active_ids = {r[0] for r in sale_agent_q.all()} | {r[0] for r in visit_agent_q.all()}
@@ -809,7 +730,7 @@ def agent_evolution(
     roster_ids = {
         u.id
         for u in db.query(User).filter(
-            User.tenant_id == tid, User.role == RoleEnum.AGENT, User.is_active == True
+            User.tenant_id == tid, User.role == RoleEnum.AGENT, User.is_active.is_(True)
         ).all()
     }
     candidate_ids = active_ids | roster_ids
@@ -820,15 +741,14 @@ def agent_evolution(
     if not candidate_ids:
         return []
 
-    agents = db.query(User).filter(User.id.in_(list(candidate_ids))).all()
-    agent_map = {a.id: a.full_name for a in agents}
+    agents = db.query(User).filter(User.tenant_id == tid, User.id.in_(list(candidate_ids))).all()
 
     # ── Aggregate sales per (agent, year, month) ────────
     sales_rows = (
         db.query(
             Sale.agent_id,
-            extract("year", Sale.sale_date).label("yr"),
-            extract("month", Sale.sale_date).label("mo"),
+            extract("year", func.timezone("UTC", Sale.sale_date)).label("yr"),
+            extract("month", func.timezone("UTC", Sale.sale_date)).label("mo"),
             func.count(Sale.id).label("cnt"),
             func.sum(Sale.sale_price).label("vol"),
             func.sum(Sale.agent_commission).label("comm"),
@@ -836,7 +756,7 @@ def agent_evolution(
         .filter(
             Sale.is_active.is_(True), Sale.tenant_id == tid,
             Sale.agent_id.in_(list(candidate_ids)),
-            Sale.sale_date >= cutoff,
+            Sale.sale_date >= cutoff, Sale.sale_date < observed_until,
         )
         .group_by(Sale.agent_id, "yr", "mo")
         .all()
@@ -846,8 +766,8 @@ def agent_evolution(
     visits_rows = (
         db.query(
             Visit.agent_id,
-            extract("year", Visit.scheduled_at).label("yr"),
-            extract("month", Visit.scheduled_at).label("mo"),
+            extract("year", func.timezone("UTC", Visit.scheduled_at)).label("yr"),
+            extract("month", func.timezone("UTC", Visit.scheduled_at)).label("mo"),
             func.count(Visit.id).label("total"),
             func.sum(
                 case((Visit.status == VisitStatus.COMPLETED, 1), else_=0)
@@ -856,7 +776,7 @@ def agent_evolution(
         .filter(
             Visit.tenant_id == tid,
             Visit.agent_id.in_(list(candidate_ids)),
-            Visit.scheduled_at >= cutoff,
+            Visit.scheduled_at >= cutoff, Visit.scheduled_at < observed_until,
         )
         .group_by(Visit.agent_id, "yr", "mo")
         .all()

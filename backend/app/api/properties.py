@@ -7,6 +7,7 @@ import logging
 from uuid import UUID
 from sqlalchemy.exc import IntegrityError
 from app.schemas.sale import SellPropertyRequest
+from app.services.metrics import utc_now
 from app.services.sales import accessible_property, buyer_query, seller_query, close_sale
 from app.core.csrf import verify_csrf_token
 
@@ -89,7 +90,7 @@ def dashboard_stats(db: Session = Depends(get_db), current_user: User = Depends(
     sold_properties = db.query(Property).filter(Property.tenant_id == tid, Property.status == PropertyStatus.VENDIDA).count()
     total_agents = db.query(User).filter(User.tenant_id == tid, User.role == RoleEnum.AGENT).count()
 
-    sales = db.query(Sale).filter(Sale.is_active.is_(True), Sale.tenant_id == tid).all()
+    sales = db.query(Sale).filter(Sale.is_active.is_(True), Sale.sale_date < utc_now(), Sale.tenant_id == tid).all()
     total_revenue = sum(s.total_commission for s in sales)
 
     unassigned_properties = db.query(Property).filter(
@@ -129,7 +130,7 @@ def agent_summary_stats(db: Session = Depends(get_db), current_user: User = Depe
         Property.status == PropertyStatus.VENDIDA
     ).count()
 
-    my_sales = db.query(Sale).filter(Sale.is_active.is_(True), Sale.tenant_id == tid, Sale.agent_id == uid).all()
+    my_sales = db.query(Sale).filter(Sale.is_active.is_(True), Sale.sale_date < utc_now(), Sale.tenant_id == tid, Sale.agent_id == uid).all()
     total_commission = sum(s.agent_commission for s in my_sales)
     total_volume = sum(s.sale_price for s in my_sales)
 
@@ -161,7 +162,7 @@ def agent_ranking(db: Session = Depends(get_db), current_user: User = Depends(ge
             Property.status != PropertyStatus.VENDIDA, Property.status != PropertyStatus.RETIRADA
         ).count()
 
-        agent_sales = db.query(Sale).filter(Sale.is_active.is_(True), Sale.tenant_id == tid, Sale.agent_id == agent.id).all()
+        agent_sales = db.query(Sale).filter(Sale.is_active.is_(True), Sale.sale_date < utc_now(), Sale.tenant_id == tid, Sale.agent_id == agent.id).all()
         total_sales = len(agent_sales)
         total_commission = sum(s.agent_commission for s in agent_sales)
         total_volume = sum(s.sale_price for s in agent_sales)

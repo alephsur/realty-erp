@@ -1,35 +1,36 @@
-import { useState, useEffect, useCallback, type CSSProperties } from 'react';
+import { useState, useEffect, useCallback, useRef, type CSSProperties } from 'react';
 import {
   TrendingUp, TrendingDown, Minus, DollarSign, Building2, Users, Home,
   BarChart2, RefreshCw, CalendarDays, Trophy, Star, CheckCircle2, ArrowUpRight,
   Activity, Filter,
 } from 'lucide-react';
 import apiClient from '../../api/client';
+import ReportMetrics, { ReportPeriodNote, type OperationalMetrics } from '../../components/ReportMetrics';
 
 // ─── Types ───────────────────────────────────────────────
-interface KpiSummary {
+interface KpiSummary extends OperationalMetrics {
   period: string;
   sales_count: number; sales_count_change: number | null;
   sales_volume: number; sales_volume_change: number | null;
   agency_commission: number; agency_commission_change: number | null;
   agent_commission_total: number;
-  avg_ticket: number; avg_commission_pct: number;
+  avg_ticket: number | null; avg_commission_pct: number | null;
   total_properties: number; active_properties: number; unassigned_properties: number;
   total_clients: number; total_agents: number;
-  visit_completion_rate: number; portfolio_conversion_rate: number;
+  sold_portfolio_share: number | null;
 }
 interface SalesByPeriod { period: string; count: number; volume: number; agency_commission: number; agent_commission: number; }
 interface AgentPerformance {
   agent_id: string | null; agent_name: string; agent_email: string;
   sales_count: number; sales_volume: number; agent_commission: number;
-  avg_ticket: number; active_properties: number;
-  total_visits: number; completed_visits: number; visit_conversion_rate: number;
+  avg_ticket: number | null; active_properties: number;
+  total_visits: number; completed_visits: number; visit_attendance_rate: number | null; visit_to_close_rate: number | null; attendance_denominator: number;
   avg_client_rating: number | null;
 }
 interface PipelineItem { status: string; label: string; count: number; total_value: number; avg_price: number; }
 interface PropertyTypeItem { type: string; label: string; count: number; percentage: number; avg_price: number; }
 interface CommissionSummary { label: string; agency_commission: number; agent_commission: number; total_commission: number; sales_count: number; }
-interface VisitAnalytics { period: string; SCHEDULED: number; COMPLETED: number; CANCELLED: number; NO_SHOW: number; total: number; completion_rate: number; }
+interface VisitAnalytics { period: string; SCHEDULED: number; COMPLETED: number; CANCELLED: number; NO_SHOW: number; total: number; visit_attendance_rate: number | null; }
 interface TopSale { id: string; property_title: string | null; agent_name: string | null; sale_price: number; agency_commission: number; sale_date: string | null; }
 interface PriceRange { range: string; count: number; }
 interface ClientAcquisition { period: string; Propietario: number; Demandante: number; total: number; }
@@ -45,9 +46,9 @@ interface AgentEvolutionData {
 }
 
 // ─── Helpers ─────────────────────────────────────────────
-const fmt = (n: number) => n.toLocaleString('es-ES', { maximumFractionDigits: 0 });
-const fmtEur = (n: number) => fmt(n) + ' €';
-const fmtPct = (n: number) => n.toFixed(1) + '%';
+const fmt = (n: number | null) => n == null ? 'Sin observaciones' : n.toLocaleString('es-ES', { maximumFractionDigits: 0 });
+const fmtEur = (n: number | null) => n == null ? 'Sin observaciones' : fmt(n) + ' €';
+const fmtPct = (n: number | null) => n == null ? 'Sin observaciones' : n.toFixed(1) + '%';
 
 const PERIOD_OPTIONS = [
   { value: 'this_month', label: 'Este mes' },
@@ -59,6 +60,8 @@ const PERIOD_OPTIONS = [
   { value: 'last_12_months', label: 'Últimos 12 meses' },
   { value: 'all', label: 'Histórico total' },
 ];
+
+const seriesLabel = (key: string) => ({ COMPLETED: 'Realizadas', SCHEDULED: 'Sin resultado', CANCELLED: 'Canceladas', NO_SHOW: 'Ausencias', agency_commission: 'Agencia', agent_commission: 'Agentes', volume: 'Volumen vendido' } as Record<string, string>)[key] ?? key;
 
 const PIE_COLORS = ['#6366f1','#10b981','#f59e0b','#8b5cf6','#06b6d4','#f43f5e','#fb923c','#14b8a6'];
 const PIPELINE_COLORS: Record<string, string> = {
@@ -117,8 +120,8 @@ function BarChartSVG({ data, valueKey, labelKey, colorFn, height = 180, formatVa
 }
 
 // ─── SVG Area/Line Chart ──────────────────────────────────
-function AreaChartSVG({ data, keys, colors, labelKey, height = 200 }: {
-  data: Record<string, any>[]; keys: string[]; colors: string[]; labelKey: string; height?: number;
+function AreaChartSVG({ data, keys, colors, labelKey, height = 200, formatVal = fmtEur }: {
+  data: Record<string, any>[]; keys: string[]; colors: string[]; labelKey: string; height?: number; formatVal?: (n: number) => string;
 }) {
   if (!data.length) return <div className="flex items-center justify-center h-32 text-sm text-slate-400">Sin datos</div>;
   const W = 540; const H = height; const pad = { t: 10, r: 10, b: 30, l: 50 };
@@ -171,7 +174,7 @@ function AreaChartSVG({ data, keys, colors, labelKey, height = 200 }: {
               <path d={linePath} fill="none" stroke={colors[ki]} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
               {pts.map((p, i) => (
                 <circle key={i} cx={p.x} cy={p.y} r={3} fill={colors[ki]}>
-                  <title>{data[i][labelKey]}: {fmtEur(data[i][k])}</title>
+                  <title>{data[i][labelKey]}: {formatVal(data[i][k])}</title>
                 </circle>
               ))}
             </g>
@@ -191,7 +194,7 @@ function AreaChartSVG({ data, keys, colors, labelKey, height = 200 }: {
         {keys.map((k, ki) => (
           <div key={k} className="flex items-center gap-1.5">
             <span className="h-2.5 w-2.5 rounded-full" style={{ background: colors[ki] }} />
-            <span className="text-xs text-slate-500 capitalize">{k.replace(/_/g, ' ')}</span>
+            <span className="text-xs text-slate-500 capitalize">{seriesLabel(k)}</span>
           </div>
         ))}
       </div>
@@ -200,8 +203,8 @@ function AreaChartSVG({ data, keys, colors, labelKey, height = 200 }: {
 }
 
 // ─── SVG Stacked Bar ─────────────────────────────────────
-function StackedBarSVG({ data, keys, colors, labelKey, height = 180 }: {
-  data: Record<string, any>[]; keys: string[]; colors: string[]; labelKey: string; height?: number;
+function StackedBarSVG({ data, keys, colors, labelKey, height = 180, formatVal = fmtEur }: {
+  data: Record<string, any>[]; keys: string[]; colors: string[]; labelKey: string; height?: number; formatVal?: (n: number) => string;
 }) {
   if (!data.length) return <div className="flex items-center justify-center h-32 text-sm text-slate-400">Sin datos en el período</div>;
   const max = Math.max(...data.map(d => keys.reduce((s, k) => s + (d[k] as number), 0)), 1);
@@ -224,7 +227,7 @@ function StackedBarSVG({ data, keys, colors, labelKey, height = 180 }: {
                   <rect key={k} x={x} y={y} width={barW} height={barH}
                     rx={ki === keys.length - 1 ? 3 : 0}
                     fill={colors[ki]} opacity={0.85}>
-                    <title>{d[labelKey]} — {k}: {fmtEur(val)}</title>
+                    <title>{d[labelKey]} — {seriesLabel(k)}: {formatVal(val)}</title>
                   </rect>
                 );
               })}
@@ -240,7 +243,7 @@ function StackedBarSVG({ data, keys, colors, labelKey, height = 180 }: {
         {keys.map((k, ki) => (
           <div key={k} className="flex items-center gap-1.5">
             <span className="h-2.5 w-2.5 rounded-sm" style={{ background: colors[ki] }} />
-            <span className="text-xs text-slate-500">{k.replace(/_/g, ' ')}</span>
+            <span className="text-xs text-slate-500">{seriesLabel(k)}</span>
           </div>
         ))}
       </div>
@@ -495,7 +498,7 @@ function AgentEvolutionSection({
             </div>
             <div>
               <h2 className="text-sm font-bold text-slate-900">Evolución de Agentes</h2>
-              <p className="text-xs text-slate-400">Seguimiento mensual de KPIs por agente</p>
+              <p className="text-xs text-slate-400">{months} meses naturales, incluido el actual hasta la consulta (UTC)</p>
             </div>
           </div>
           {/* Window selector */}
@@ -633,6 +636,8 @@ function AgentEvolutionSection({
 // ─── Main Component ──────────────────────────────────────
 export default function Reports() {
   const [period, setPeriod] = useState('this_year');
+  const requestNumber = useRef(0);
+  const [loadError, setLoadError] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -655,9 +660,13 @@ export default function Reports() {
     'sales_volume' | 'sales_count' | 'agent_commission' | 'visits_completed' | 'visits_total'
   >('sales_volume');
   const [evoLoading, setEvoLoading] = useState(false);
+  const evolutionRequest = useRef(0);
+  const [evoError, setEvoError] = useState('');
 
   const fetchAll = useCallback(async () => {
+    const request = ++requestNumber.current;
     setLoading(true);
+    setLoadError('');
     try {
       const [kpiR, salesR, agentR, pipeR, typeR, commR, visitR, clientR, topR, priceR] =
         await Promise.all([
@@ -672,6 +681,7 @@ export default function Reports() {
           apiClient.get(`/reports/top-sales?period=${period}&limit=7`),
           apiClient.get('/reports/price-distribution'),
         ]);
+      if (request !== requestNumber.current) return;
       setKpi(kpiR.data);
       setSalesTrend(salesR.data);
       const perfData: AgentPerformance[] = agentR.data;
@@ -683,22 +693,25 @@ export default function Reports() {
       setClients(clientR.data);
       setTopSales(topR.data);
       setPriceRange(priceR.data);
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
+    } catch { if (request === requestNumber.current) setLoadError('No se pudieron cargar los indicadores del periodo.'); }
+    finally { if (request === requestNumber.current) setLoading(false); }
   }, [period, refreshKey]);
 
   const fetchEvolution = useCallback(async () => {
+    const request = ++evolutionRequest.current;
     setEvoLoading(true);
+    setEvoError('');
     try {
       const res = await apiClient.get(`/reports/agent-evolution?months=${evoMonths}`);
+      if (request !== evolutionRequest.current) return;
       const data: AgentEvolutionData[] = res.data;
       setAgentEvolution(data);
       // Default: select all agents
       setSelectedAgents(prev =>
         prev.size === 0 ? new Set(data.map(a => a.agent_id)) : prev
       );
-    } catch (e) { console.error(e); }
-    finally { setEvoLoading(false); }
+    } catch { if (request === evolutionRequest.current) { setAgentEvolution([]); setEvoError('No se pudo cargar la evolución de agentes.'); } }
+    finally { if (request === evolutionRequest.current) setEvoLoading(false); }
   }, [evoMonths, refreshKey]);
 
   useEffect(() => { fetchEvolution(); }, [fetchEvolution]);
@@ -708,10 +721,9 @@ export default function Reports() {
   // KPI card definitions
   const kpiCards = kpi ? [
     { label: 'Ventas cerradas', value: String(kpi.sales_count), sub: fmtEur(kpi.sales_volume) + ' en ventas', change: kpi.sales_count_change, icon: CheckCircle2, bg: 'bg-indigo-50', text: 'text-indigo-600' },
-    { label: 'Comisión Agencia', value: fmtEur(kpi.agency_commission), sub: fmtPct(kpi.avg_commission_pct) + ' sobre venta', change: kpi.agency_commission_change, icon: DollarSign, bg: 'bg-emerald-50', text: 'text-emerald-600' },
-    { label: 'Ticket Medio', value: fmtEur(kpi.avg_ticket), sub: kpi.active_properties + ' propiedades activas', change: null, icon: Building2, bg: 'bg-amber-50', text: 'text-amber-600' },
-    { label: 'Visitas Completadas', value: fmtPct(kpi.visit_completion_rate), sub: fmtPct(kpi.portfolio_conversion_rate) + ' conv. portfolio', change: null, icon: CalendarDays, bg: 'bg-violet-50', text: 'text-violet-600' },
-    { label: 'Clientes / Agentes', value: `${kpi.total_clients} / ${kpi.total_agents}`, sub: kpi.unassigned_properties + ' props. sin agente', change: null, icon: Users, bg: 'bg-rose-50', text: 'text-rose-600' },
+    { label: 'Comisión Agencia', value: fmtEur(kpi.agency_commission), sub: fmtPct(kpi.avg_commission_pct) + ' de comisión total sobre ventas', change: kpi.agency_commission_change, icon: DollarSign, bg: 'bg-emerald-50', text: 'text-emerald-600' },
+    { label: 'Precio medio de venta', value: fmtEur(kpi.avg_ticket), sub: 'Importe medio de los cierres del periodo', change: null, icon: Building2, bg: 'bg-amber-50', text: 'text-amber-600' },
+    { label: 'Clientes / Agentes actuales', value: `${kpi.total_clients} / ${kpi.total_agents}`, sub: kpi.unassigned_properties + ' propiedades sin agente ahora', change: null, icon: Users, bg: 'bg-rose-50', text: 'text-rose-600' },
   ] : [];
 
   if (loading) return (
@@ -720,6 +732,8 @@ export default function Reports() {
       <p className="text-slate-500 text-sm font-medium">Cargando analíticas...</p>
     </div>
   );
+
+  if (loadError) return <div role="alert" className="p-8 text-red-700">{loadError} <button className="underline" onClick={() => setRefreshKey(k => k + 1)}>Reintentar</button></div>;
 
   const Card = ({ children, className = '' }: { children: React.ReactNode; className?: string }) => (
     <div className={`bg-white rounded-2xl p-6 shadow-sm ring-1 ring-slate-900/5 ${className}`}>{children}</div>
@@ -747,7 +761,7 @@ export default function Reports() {
           <p className="text-slate-500 mt-1 text-sm">Visión integral del rendimiento del negocio inmobiliario.</p>
         </div>
         <div className="flex items-center gap-3">
-          <select value={period} onChange={e => setPeriod(e.target.value)}
+          <select aria-label="Periodo de actividad" value={period} onChange={e => setPeriod(e.target.value)}
             className="rounded-xl border-0 ring-1 ring-slate-300 py-2 pl-3 pr-8 text-sm font-medium text-slate-800 bg-white focus:ring-2 focus:ring-indigo-600 shadow-sm">
             {PERIOD_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
@@ -758,9 +772,11 @@ export default function Reports() {
         </div>
       </div>
 
+      {kpi && <ReportPeriodNote metrics={kpi} />}
+
       {/* ── KPI Cards ── */}
       {kpi && (
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           {kpiCards.map(card => {
             const Icon = card.icon;
             return (
@@ -773,7 +789,7 @@ export default function Reports() {
                 </div>
                 <p className="text-2xl font-bold text-slate-900 leading-tight">{card.value}</p>
                 <div className="flex items-center justify-between mt-2 gap-2">
-                  <p className="text-xs text-slate-400 truncate">{card.sub}</p>
+                  <p className="text-xs text-slate-500">{card.sub}</p>
                   {card.change !== null && <Trend value={card.change} />}
                 </div>
               </div>
@@ -781,6 +797,8 @@ export default function Reports() {
           })}
         </div>
       )}
+
+      {kpi && <ReportMetrics metrics={kpi} />}
 
       {/* ── Unassigned Alert ── */}
       {kpi && kpi.unassigned_properties > 0 && (
@@ -797,7 +815,7 @@ export default function Reports() {
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
 
         <Card className="xl:col-span-2">
-          <SectionHeader icon={TrendingUp} title="Tendencia de Ventas" subtitle="Últimos 12 meses — volumen y comisiones" />
+          <SectionHeader icon={TrendingUp} title="Tendencia de Ventas" subtitle="12 meses naturales, incluido el actual hasta la consulta (UTC)" />
           <AreaChartSVG
             data={salesTrend}
             keys={['volume', 'agency_commission']}
@@ -807,7 +825,7 @@ export default function Reports() {
         </Card>
 
         <Card>
-          <SectionHeader icon={BarChart2} title="Pipeline Inmobiliario" subtitle="Propiedades por estado del proceso" />
+          <SectionHeader icon={BarChart2} title="Cartera por estado" subtitle="Situación actual; no mide conversión entre etapas" />
           <div className="space-y-3">
             {pipeline.map(p => {
               const maxCount = Math.max(...pipeline.map(x => x.count), 1);
@@ -845,9 +863,10 @@ export default function Reports() {
         </Card>
 
         <Card>
-          <SectionHeader icon={CalendarDays} title="Analítica de Visitas" subtitle="Últimos 6 meses por estado" />
+          <SectionHeader icon={CalendarDays} title="Analítica de Visitas" subtitle="6 meses naturales hasta la consulta (UTC); pendientes son visitas sin resultado" />
           <StackedBarSVG
             data={visits}
+            formatVal={n => `${n} visitas`}
             keys={['COMPLETED', 'SCHEDULED', 'CANCELLED', 'NO_SHOW']}
             colors={['#10b981', '#3b82f6', '#f43f5e', '#f59e0b']}
             labelKey="period"
@@ -858,12 +877,12 @@ export default function Reports() {
       {/* ── Row 3: Donut + Price Histogram + Client Acquisition ── */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
         <Card>
-          <SectionHeader icon={Home} title="Composición del Portfolio" subtitle="Por tipo de inmueble" />
+          <SectionHeader icon={Home} title="Composición del Portfolio" subtitle="Cartera actual por tipo de inmueble" />
           <DonutSVG data={propTypes} labelKey="label" valueKey="count" />
         </Card>
 
         <Card>
-          <SectionHeader icon={BarChart2} title="Distribución de Precios" subtitle="Nº de inmuebles por rango" />
+          <SectionHeader icon={BarChart2} title="Distribución de Precios" subtitle="Cartera actual; número de inmuebles por rango" />
           <BarChartSVG
             data={priceRange}
             valueKey="count"
@@ -873,9 +892,10 @@ export default function Reports() {
         </Card>
 
         <Card>
-          <SectionHeader icon={Users} title="Captación de Clientes" subtitle="Nuevos clientes por mes" />
+          <SectionHeader icon={Users} title="Captación de Clientes" subtitle="Altas de los últimos 12 meses naturales hasta la consulta (UTC)" />
           <AreaChartSVG
             data={clients}
+            formatVal={n => `${n} clientes`}
             keys={['Propietario', 'Demandante']}
             colors={['#3b82f6', '#8b5cf6']}
             labelKey="period"
@@ -902,7 +922,7 @@ export default function Reports() {
             <table className="min-w-full divide-y divide-slate-100">
               <thead>
                 <tr className="bg-slate-50/50">
-                  {['#', 'Agente', 'Ventas', 'Volumen', 'Comisión', 'Props', 'Visitas', 'Conversión', 'Rating', 'Performance'].map(h => (
+                  {['#', 'Agente', 'Ventas', 'Volumen', 'Comisión', 'Props. actuales', 'Visitas del periodo', 'Asistencia', 'Visita → cierre', 'Valoración del periodo', 'Volumen relativo'].map(h => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -951,19 +971,14 @@ export default function Reports() {
                       <td className="px-4 py-4 text-sm font-semibold text-slate-800 whitespace-nowrap">{fmtEur(agent.sales_volume)}</td>
                       <td className="px-4 py-4 text-sm font-semibold text-emerald-700 whitespace-nowrap">{fmtEur(agent.agent_commission)}</td>
                       <td className="px-4 py-4 text-sm text-center text-slate-600">{isUnassigned ? '—' : agent.active_properties}</td>
-                      <td className="px-4 py-4 text-sm text-center text-slate-600">{isUnassigned ? '—' : agent.total_visits}</td>
+                      <td className="px-4 py-4 text-sm text-center text-slate-600">{agent.total_visits}</td>
                       <td className="px-4 py-4">
-                        {isUnassigned ? (
-                          <span className="text-slate-300 text-xs">—</span>
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            <div className="h-1.5 w-16 bg-slate-100 rounded-full overflow-hidden">
-                              <div className="h-full rounded-full bg-blue-500" style={{ width: `${agent.visit_conversion_rate}%` }} />
-                            </div>
-                            <span className="text-xs font-medium text-slate-600 tabular-nums">{fmtPct(agent.visit_conversion_rate)}</span>
-                          </div>
-                        )}
+                        <div className="flex items-center gap-2" title={`${agent.completed_visits} realizadas / ${agent.attendance_denominator} con resultado`}>
+                          <div className="h-1.5 w-16 bg-slate-100 rounded-full overflow-hidden"><div className="h-full rounded-full bg-blue-500" style={{ width: `${agent.visit_attendance_rate ?? 0}%` }} /></div>
+                          <span className="text-xs font-medium text-slate-600 tabular-nums">{fmtPct(agent.visit_attendance_rate)}</span>
+                        </div>
                       </td>
+                      <td className="px-4 py-4 text-xs text-slate-600">{fmtPct(agent.visit_to_close_rate)}</td>
                       <td className="px-4 py-4">
                         {agent.avg_client_rating !== null ? (
                           <span className="inline-flex items-center gap-1"><Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" /><span className="text-xs font-semibold text-slate-700">{agent.avg_client_rating.toFixed(1)}</span></span>
@@ -991,6 +1006,7 @@ export default function Reports() {
       </div>
 
       {/* ── Row 5: Agent Evolution Charts ── */}
+      {evoError && <p role="alert" className="text-red-700">{evoError} <button className="underline" onClick={fetchEvolution}>Reintentar evolución</button></p>}
       <AgentEvolutionSection
         data={agentEvolution}
         loading={evoLoading}
@@ -1036,17 +1052,17 @@ export default function Reports() {
 
         {kpi && (
           <Card>
-            <SectionHeader icon={BarChart2} title="Métricas Clave de Negocio" subtitle="Ratios de gestión del período" />
+            <SectionHeader icon={BarChart2} title="Métricas Clave de Negocio" subtitle="Cada indicador señala si corresponde al periodo o a la cartera actual" />
             <div className="grid grid-cols-2 gap-3">
               {[
-                { label: 'Comisión media', value: fmtPct(kpi.avg_commission_pct), color: 'text-indigo-600' },
+                { label: 'Comisión total / volumen del periodo', value: fmtPct(kpi.avg_commission_pct), color: 'text-indigo-600' },
                 { label: 'Ticket medio', value: fmtEur(kpi.avg_ticket), color: 'text-emerald-600' },
-                { label: 'Conv. portfolio', value: fmtPct(kpi.portfolio_conversion_rate), color: 'text-amber-600' },
-                { label: 'Tasa visitas OK', value: fmtPct(kpi.visit_completion_rate), color: 'text-violet-600' },
-                { label: 'Sin agente', value: String(kpi.unassigned_properties), color: kpi.unassigned_properties > 0 ? 'text-rose-600' : 'text-emerald-600' },
-                { label: 'Total clientes', value: String(kpi.total_clients), color: 'text-blue-600' },
-                { label: 'Pago a agentes', value: fmtEur(kpi.agent_commission_total), color: 'text-slate-700' },
-                { label: 'Props activas', value: `${kpi.active_properties} / ${kpi.total_properties}`, color: 'text-slate-700' },
+                { label: 'Proporción vendida de la cartera actual', value: fmtPct(kpi.sold_portfolio_share), color: 'text-amber-600' },
+                { label: 'Asistencia del periodo', value: fmtPct(kpi.visit_attendance_rate), color: 'text-violet-600' },
+                { label: 'Propiedades sin agente ahora', value: String(kpi.unassigned_properties), color: kpi.unassigned_properties > 0 ? 'text-rose-600' : 'text-emerald-600' },
+                { label: 'Clientes registrados actualmente', value: String(kpi.total_clients), color: 'text-blue-600' },
+                { label: 'Comisión devengada de agentes (periodo)', value: fmtEur(kpi.agent_commission_total), color: 'text-slate-700' },
+                { label: 'Cartera activa / total actual', value: `${kpi.active_properties} / ${kpi.total_properties}`, color: 'text-slate-700' },
               ].map(m => (
                 <div key={m.label} className="bg-slate-50 rounded-xl p-4">
                   <p className="text-xs text-slate-500 mb-1">{m.label}</p>

@@ -59,15 +59,15 @@ function ManagerDashboard() {
   const cards = stats ? [
     { name: 'Total Propiedades', value: String(stats.total_properties), icon: Home, detail: `${stats.active_properties} activas`, color: 'text-indigo-600 bg-indigo-50 border-indigo-100' },
     { name: 'Agentes', value: String(stats.total_agents), icon: Users, detail: 'Agentes registrados', color: 'text-blue-600 bg-blue-50 border-blue-100' },
-    { name: 'Ventas Cerradas', value: String(stats.total_sales), icon: CheckCircle2, detail: `${stats.sold_properties} propiedades vendidas`, color: 'text-emerald-600 bg-emerald-50 border-emerald-100' },
-    { name: 'Ingresos (Comisiones)', value: `${stats.total_revenue.toLocaleString('es-ES')} €`, icon: DollarSign, detail: 'Total ganado', color: 'text-amber-600 bg-amber-50 border-amber-100' },
+    { name: 'Ventas acumuladas', value: String(stats.total_sales), icon: CheckCircle2, detail: `${stats.sold_properties} propiedades vendidas`, color: 'text-emerald-600 bg-emerald-50 border-emerald-100' },
+    { name: 'Comisión total devengada', value: `${stats.total_revenue.toLocaleString('es-ES')} €`, icon: DollarSign, detail: 'Acumulado de cierres activos; agencia y agentes', color: 'text-amber-600 bg-amber-50 border-amber-100' },
   ] : [];
 
   return (
     <div className="p-8 space-y-8">
       <div>
         <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">Dashboard</h1>
-        <p className="text-slate-500 mt-1">Resumen de tu negocio inmobiliario.</p>
+        <p className="text-slate-500 mt-1">Cartera actual y ventas acumuladas hasta hoy. Las comisiones reflejan devengos, no cobros.</p>
       </div>
 
       {loading ? (
@@ -113,7 +113,7 @@ function ManagerDashboard() {
             <div className="bg-white rounded-2xl ring-1 ring-slate-900/5 shadow-sm overflow-hidden">
               <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center gap-2">
                 <Trophy className="h-5 w-5 text-amber-500" />
-                <h2 className="text-base font-bold text-slate-900">Ranking de Agentes</h2>
+                <h2 className="text-base font-bold text-slate-900">Ranking acumulado de agentes</h2>
               </div>
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-slate-200">

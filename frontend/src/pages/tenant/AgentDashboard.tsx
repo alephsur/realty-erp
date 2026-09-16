@@ -86,9 +86,9 @@ export default function AgentDashboard() {
 
   const kpiCards = stats ? [
     { name: 'Mis Propiedades', value: String(stats.active_properties), icon: Home, detail: `${stats.total_properties} total asignadas`, color: 'bg-indigo-50 border-indigo-100 text-indigo-600' },
-    { name: 'Ventas Cerradas', value: String(stats.total_sales), icon: CheckCircle2, detail: `${stats.sold_properties} propiedades vendidas`, color: 'bg-emerald-50 border-emerald-100 text-emerald-600' },
-    { name: 'Comisión Acumulada', value: `${stats.total_commission.toLocaleString('es-ES')} €`, icon: DollarSign, detail: 'Total ganado en comisiones', color: 'bg-amber-50 border-amber-100 text-amber-600' },
-    { name: 'Volumen de Ventas', value: `${stats.total_volume.toLocaleString('es-ES')} €`, icon: TrendingUp, detail: 'Total vendido', color: 'bg-purple-50 border-purple-100 text-purple-600' },
+    { name: 'Ventas acumuladas', value: String(stats.total_sales), icon: CheckCircle2, detail: `${stats.sold_properties} propiedades vendidas`, color: 'bg-emerald-50 border-emerald-100 text-emerald-600' },
+    { name: 'Comisión Acumulada', value: `${stats.total_commission.toLocaleString('es-ES')} €`, icon: DollarSign, detail: 'Comisión devengada acumulada; no equivale a pagos', color: 'bg-amber-50 border-amber-100 text-amber-600' },
+    { name: 'Volumen de Ventas', value: `${stats.total_volume.toLocaleString('es-ES')} €`, icon: TrendingUp, detail: 'Cierres activos acumulados hasta hoy', color: 'bg-purple-50 border-purple-100 text-purple-600' },
   ] : [];
 
   if (loading) {

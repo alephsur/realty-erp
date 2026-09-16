@@ -112,6 +112,8 @@ Las reglas, migración y comprobaciones están en [F0-02 — Cierre único](docs
 
 Correcciones, reaperturas y ajustes de comisión: [F0-03](docs/F0-03.md).
 
+Definiciones, periodos y cálculos de indicadores: [F0-04](docs/F0-04.md).
+
 ---
 
 ### Comisiones (`/commissions`)
