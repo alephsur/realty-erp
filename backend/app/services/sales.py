@@ -15,6 +15,8 @@ from app.models.crm import Client, ClientType
 from app.models.properties import Property, PropertyStatus
 from app.models.transactions import Sale
 from app.schemas.sale import SellPropertyRequest
+from app.services.access import client_query, property_query
+from app.services.access import lock_agency as lock_agency
 
 MANAGEMENT_ROLES = (RoleEnum.ADMIN, RoleEnum.MANAGER)
 SELLER_ROLES = (*MANAGEMENT_ROLES, RoleEnum.AGENT)
@@ -24,9 +26,7 @@ CENT = Decimal("0.01")
 def accessible_property(db: Session, property_id: UUID, user: User, *, lock=False):
     if not user.tenant_id or user.role not in SELLER_ROLES:
         raise HTTPException(403, "No tienes permiso para cerrar ventas.")
-    query = db.query(Property).filter(
-        Property.id == property_id, Property.tenant_id == user.tenant_id
-    )
+    query = property_query(db, user).filter(Property.id == property_id)
     if user.role == RoleEnum.AGENT:
         query = query.filter(Property.agent_id == user.id)
     if lock:
@@ -38,7 +38,7 @@ def accessible_property(db: Session, property_id: UUID, user: User, *, lock=Fals
 
 
 def buyer_query(db: Session, user: User):
-    query = db.query(Client).filter(
+    query = client_query(db, user).filter(
         Client.tenant_id == user.tenant_id,
         Client.client_type == ClientType.BUYER,
         Client.is_active.is_(True),
@@ -162,14 +162,6 @@ def close_sale(db: Session, property_id: UUID, data: SellPropertyRequest, user: 
     db.flush()
     return sale, True
 
-
-def lock_agency(db, user):
-    """Serialize economic writes so settlement includes every outstanding credit."""
-    from app.models.auth import Tenant
-
-    if not user.tenant_id or user.role not in SELLER_ROLES:
-        raise HTTPException(403, "No tienes permiso para gestionar ventas.")
-    db.query(Tenant).filter(Tenant.id == user.tenant_id).with_for_update().one()
 
 
 def sale_snapshot(sale):

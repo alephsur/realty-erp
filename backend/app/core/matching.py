@@ -5,24 +5,29 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
+from app.models.auth import RoleEnum
 from app.models.crm import Client, ClientType
 from app.models.properties import Property, PropertyStatus
+from app.services.access import client_query, property_query
 
 
-def find_matching_buyers(db: Session, prop: Property, limit: int = 20) -> List[Dict[str, Any]]:
+def find_matching_buyers(db: Session, prop: Property, limit: int = 20, *, user) -> List[Dict[str, Any]]:
     """Return buyer clients whose preferences are compatible with *prop*."""
+    if user.tenant_id != prop.tenant_id:
+        return []
     buyers = (
-        db.query(Client)
+        client_query(db, user)
         .filter(
             Client.tenant_id == prop.tenant_id,
             Client.client_type == ClientType.BUYER,
             Client.is_active == True,
         )
-        .all()
     )
 
+    if user.role == RoleEnum.AGENT:
+        buyers = buyers.filter(Client.agent_id == user.id)
     matches: List[Dict[str, Any]] = []
-    for buyer in buyers:
+    for buyer in buyers.all():
         score = 0
         reasons: List[str] = []
 
@@ -70,19 +75,22 @@ def find_matching_buyers(db: Session, prop: Property, limit: int = 20) -> List[D
     return matches[:limit]
 
 
-def find_matching_properties(db: Session, buyer: Client, limit: int = 20) -> List[Dict[str, Any]]:
+def find_matching_properties(db: Session, buyer: Client, limit: int = 20, *, user) -> List[Dict[str, Any]]:
     """Return active properties that match *buyer*'s preferences."""
+    if user.tenant_id != buyer.tenant_id:
+        return []
     props = (
-        db.query(Property)
+        property_query(db, user)
         .filter(
             Property.tenant_id == buyer.tenant_id,
             Property.status.in_([PropertyStatus.PUBLICADA, PropertyStatus.EN_VISITAS]),
         )
-        .all()
     )
 
+    if user.role == RoleEnum.AGENT:
+        props = props.filter(Property.agent_id == user.id)
     matches: List[Dict[str, Any]] = []
-    for prop in props:
+    for prop in props.all():
         score = 0
         reasons: List[str] = []
 

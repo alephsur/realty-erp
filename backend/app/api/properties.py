@@ -1,27 +1,39 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func as sqla_func, case
-from pydantic import BaseModel
-from typing import Optional, List
 import logging
+from typing import List, Optional
 from uuid import UUID
-from sqlalchemy.exc import IntegrityError
-from app.schemas.sale import SellPropertyRequest
-from app.services.metrics import utc_now
-from app.services.sales import accessible_property, buyer_query, seller_query, close_sale
-from app.core.csrf import verify_csrf_token
 
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, joinedload
+
+from app.api.dependencies import get_agency_user as get_current_user
+from app.core.csrf import verify_csrf_token
 from app.database import get_db
-from app.models.auth import User, RoleEnum
+from app.models.auth import RoleEnum, User
+from app.models.crm import Client, ClientPropertyInterest
 from app.models.properties import Property, PropertyStatus, PropertyType
 from app.models.transactions import Sale
-from app.models.crm import Client
-from app.api.dependencies import get_current_user
-from app.schemas import PropertyRead, SaleRead, AgentRankingRead
+from app.models.visits import Visit
+from app.schemas import AgentRankingRead, PropertyRead, SaleRead
+from app.schemas.sale import SellPropertyRequest
+from app.services.access import (
+    assignee,
+    lock_agency,
+    property_query,
+    require_management,
+)
+from app.services.metrics import utc_now
+from app.services.sales import (
+    accessible_property,
+    buyer_query,
+    close_sale,
+    seller_query,
+)
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/properties", tags=["properties"])
+router = APIRouter(prefix="/properties", tags=["properties"], dependencies=[Depends(verify_csrf_token)])
 
 # ==========================================
 # SCHEMAS (write / mutation only)
@@ -43,7 +55,7 @@ class PropertyCreate(BaseModel):
     owner_phone: Optional[str] = None
     owner_email: Optional[str] = None
     commission_rate: float = 0.0
-    agent_id: Optional[str] = None
+    agent_id: Optional[UUID] = None
     agent_commission_rate: Optional[float] = None
 
 class PropertyUpdate(BaseModel):
@@ -62,17 +74,17 @@ class PropertyUpdate(BaseModel):
     owner_phone: Optional[str] = None
     owner_email: Optional[str] = None
     commission_rate: Optional[float] = None
-    agent_id: Optional[str] = None
+    agent_id: Optional[UUID] = None
     agent_commission_rate: Optional[float] = None
     status: Optional[PropertyStatus] = None
 
 class AssignPropertyRequest(BaseModel):
-    agent_id: Optional[str] = None  # null to unassign
+    agent_id: Optional[UUID] = None  # null to unassign
     agent_commission_rate: Optional[float] = None
 
 class BulkAssignRequest(BaseModel):
-    property_ids: List[str]
-    agent_id: Optional[str] = None
+    property_ids: List[UUID]
+    agent_id: Optional[UUID] = None
     agent_commission_rate: Optional[float] = None
 
 # ==========================================
@@ -84,6 +96,7 @@ def dashboard_stats(db: Session = Depends(get_db), current_user: User = Depends(
     if not current_user.tenant_id:
         raise HTTPException(status_code=400, detail="User does not belong to a tenant")
 
+    require_management(current_user)
     tid = current_user.tenant_id
     total_properties = db.query(Property).filter(Property.tenant_id == tid).count()
     active_properties = db.query(Property).filter(Property.tenant_id == tid, Property.status != PropertyStatus.VENDIDA, Property.status != PropertyStatus.RETIRADA).count()
@@ -200,7 +213,7 @@ def list_properties(
         raise HTTPException(status_code=400, detail="User does not belong to a tenant")
 
     base_q = (
-        db.query(Property)
+        property_query(db, current_user)
         .options(joinedload(Property.agent))
         .filter(Property.tenant_id == current_user.tenant_id)
     )
@@ -253,7 +266,7 @@ def list_my_properties(
         raise HTTPException(status_code=400, detail="User does not belong to a tenant")
 
     base_q = (
-        db.query(Property)
+        property_query(db, current_user)
         .options(joinedload(Property.agent))
         .filter(
             Property.tenant_id == current_user.tenant_id,
@@ -275,13 +288,13 @@ def list_my_properties(
 
 @router.get("/{property_id}/matching-buyers")
 def matching_buyers(
-    property_id: str,
+    property_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Return buyer clients whose preferences match this property."""
     prop = (
-        db.query(Property)
+        property_query(db, current_user)
         .options(joinedload(Property.agent))
         .filter(Property.id == property_id, Property.tenant_id == current_user.tenant_id)
         .first()
@@ -290,14 +303,14 @@ def matching_buyers(
         raise HTTPException(status_code=404, detail="Property not found")
 
     from app.core.matching import find_matching_buyers
-    matches = find_matching_buyers(db, prop)
+    matches = find_matching_buyers(db, prop, user=current_user)
     return {"property_id": property_id, "total_matches": len(matches), "matches": matches}
 
 
 @router.get("/{property_id}", response_model=PropertyRead)
-def get_property(property_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def get_property(property_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     prop = (
-        db.query(Property)
+        property_query(db, current_user)
         .options(joinedload(Property.agent))
         .filter(Property.id == property_id, Property.tenant_id == current_user.tenant_id)
         .first()
@@ -316,6 +329,9 @@ def create_property(data: PropertyCreate, db: Session = Depends(get_db), current
     if not current_user.tenant_id:
         raise HTTPException(status_code=400, detail="User does not belong to a tenant")
 
+    lock_agency(db, current_user)
+    require_management(current_user)
+    assignee(db, current_user, data.agent_id)
     new_prop = Property(
         tenant_id=current_user.tenant_id,
         title=data.title,
@@ -342,13 +358,13 @@ def create_property(data: PropertyCreate, db: Session = Depends(get_db), current
 
     # Notify about matching buyers (best-effort)
     try:
-        from app.core.matching import find_matching_buyers
         from app.api.notifications import push, push_to_managers
+        from app.core.matching import find_matching_buyers
         db.refresh(new_prop)
         if new_prop.agent:
             db.refresh(new_prop.agent)
 
-        matches = find_matching_buyers(db, new_prop)
+        matches = find_matching_buyers(db, new_prop, user=new_prop.agent or current_user)
         if matches:
             body = f"La propiedad '{new_prop.title}' tiene {len(matches)} comprador(es) potencial(es) en el CRM."
             if new_prop.agent_id:
@@ -366,8 +382,33 @@ def create_property(data: PropertyCreate, db: Session = Depends(get_db), current
     return {"message": "Property created", "id": str(new_prop.id)}
 
 
+@router.put("/bulk-assign", status_code=status.HTTP_200_OK)
+def bulk_assign_properties(data: BulkAssignRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Bulk reassign multiple properties to an agent."""
+    lock_agency(db, current_user)
+    if current_user.role not in [RoleEnum.ADMIN, RoleEnum.MANAGER]:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    agent = assignee(db, current_user, data.agent_id)
+    ids = set(data.property_ids)
+    if not ids:
+        raise HTTPException(422, "Selecciona al menos una propiedad.")
+    properties = property_query(db, current_user).filter(Property.id.in_(ids)).order_by(Property.id).with_for_update().all()
+    if len(properties) != len(ids):
+        raise HTTPException(404, "Una o varias propiedades no son accesibles.")
+    for prop in properties:
+        prop.agent_id = agent.id if agent else None
+        if data.agent_commission_rate is not None:
+            prop.agent_commission_rate = data.agent_commission_rate
+    updated = len(properties)
+
+    db.commit()
+    return {"message": f"{updated} properties updated"}
+
+
 @router.put("/{property_id}")
-def update_property(property_id: str, data: PropertyUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def update_property(property_id: UUID, data: PropertyUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    lock_agency(db, current_user)
     if current_user.role not in [RoleEnum.ADMIN, RoleEnum.MANAGER]:
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
@@ -376,6 +417,11 @@ def update_property(property_id: str, data: PropertyUpdate, db: Session = Depend
         raise HTTPException(status_code=404, detail="Property not found")
 
     update_data = data.model_dump(exclude_unset=True)
+    if "agent_id" in update_data and data.agent_id != prop.agent_id:
+        assignee(db, current_user, data.agent_id)
+    for field in ("title", "property_type", "price", "address"):
+        if field in update_data and update_data[field] is None:
+            raise HTTPException(422, "Los campos obligatorios no pueden estar vacíos.")
     if "status" in update_data:
         if update_data["status"] is None:
             raise HTTPException(422, "El estado no puede estar vacío.")
@@ -395,7 +441,8 @@ def update_property(property_id: str, data: PropertyUpdate, db: Session = Depend
 
 
 @router.delete("/{property_id}")
-def delete_property(property_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def delete_property(property_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    lock_agency(db, current_user)
     if current_user.role not in [RoleEnum.ADMIN, RoleEnum.MANAGER]:
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
@@ -403,6 +450,10 @@ def delete_property(property_id: str, db: Session = Depends(get_db), current_use
     if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
 
+    if (db.query(Sale.id).filter(Sale.property_id == prop.id).first()
+        or db.query(Visit.id).filter(Visit.property_id == prop.id).first()
+        or db.query(ClientPropertyInterest.id).filter(ClientPropertyInterest.property_id == prop.id).first()):
+        raise HTTPException(409, "La propiedad tiene historial comercial y no se puede eliminar. Puedes retirarla si no está vendida.")
     db.delete(prop)
     db.commit()
     return {"message": "Property deleted"}
@@ -413,8 +464,9 @@ def delete_property(property_id: str, db: Session = Depends(get_db), current_use
 # ==========================================
 
 @router.put("/{property_id}/assign")
-def assign_property(property_id: str, data: AssignPropertyRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def assign_property(property_id: UUID, data: AssignPropertyRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Assign or unassign an agent to a property, optionally setting a per-property commission rate."""
+    lock_agency(db, current_user)
     if current_user.role not in [RoleEnum.ADMIN, RoleEnum.MANAGER]:
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
@@ -422,13 +474,8 @@ def assign_property(property_id: str, data: AssignPropertyRequest, db: Session =
     if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
 
-    if data.agent_id:
-        agent = db.query(User).filter(User.id == data.agent_id, User.tenant_id == current_user.tenant_id).first()
-        if not agent:
-            raise HTTPException(status_code=404, detail="Agent not found")
-        prop.agent_id = agent.id
-    else:
-        prop.agent_id = None
+    agent = assignee(db, current_user, data.agent_id)
+    prop.agent_id = agent.id if agent else None
 
     if data.agent_commission_rate is not None:
         prop.agent_commission_rate = data.agent_commission_rate
@@ -436,29 +483,6 @@ def assign_property(property_id: str, data: AssignPropertyRequest, db: Session =
     db.commit()
     return {"message": "Property assignment updated"}
 
-
-@router.put("/bulk-assign", status_code=status.HTTP_200_OK)
-def bulk_assign_properties(data: BulkAssignRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Bulk reassign multiple properties to an agent."""
-    if current_user.role not in [RoleEnum.ADMIN, RoleEnum.MANAGER]:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
-
-    if data.agent_id:
-        agent = db.query(User).filter(User.id == data.agent_id, User.tenant_id == current_user.tenant_id).first()
-        if not agent:
-            raise HTTPException(status_code=404, detail="Agent not found")
-
-    updated = 0
-    for pid in data.property_ids:
-        prop = db.query(Property).filter(Property.id == pid, Property.tenant_id == current_user.tenant_id).first()
-        if prop:
-            prop.agent_id = data.agent_id if data.agent_id else None
-            if data.agent_commission_rate is not None:
-                prop.agent_commission_rate = data.agent_commission_rate
-            updated += 1
-
-    db.commit()
-    return {"message": f"{updated} properties updated"}
 
 
 # ==========================================
@@ -549,7 +573,7 @@ def sell_property(
 @router.get("/sales/list")
 def list_sales(
     state: str = Query("active", pattern="^(active|reopened|all)$"),
-    agent_id: Optional[str] = Query(None),
+    agent_id: Optional[UUID] = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(25, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -580,7 +604,6 @@ def list_sales(
     pages = max(1, -(-total // limit))
     items = query.order_by(Sale.sale_date.desc()).offset((page - 1) * limit).limit(limit).all()
 
-    from app.schemas import SaleRead
     return {
         "items": [SaleRead.model_validate(s) for s in items],
         "total": total,

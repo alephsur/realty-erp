@@ -1,26 +1,32 @@
+import hashlib
+import logging
+import secrets
+from typing import Literal, Optional
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
-from sqlalchemy import update as sa_update
 from pydantic import BaseModel, EmailStr
-from typing import Optional
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-import hashlib
-import secrets
-import logging
+from sqlalchemy import update as sa_update
+from sqlalchemy.orm import Session
+
+from app.api.dependencies import validate_active_account
+from app.services.access import lock_agency, preserve_management
 
 # Re-use the same limiter instance registered in main.py
 limiter = Limiter(key_func=get_remote_address)
 
-from app.database import get_db
-from app.models.auth import Tenant, User, RoleEnum
-from app.core.security import get_password_hash, verify_password
-from app.core.config import settings
-from app.core.csrf import verify_csrf_token, CSRF_COOKIE
-from app.auth.jwt import create_access_token, create_invite_token, decode_invite_token
-from app.api.dependencies import get_current_user, get_superadmin_user
 from jose import JWTError
+
+from app.api.dependencies import get_current_user, get_superadmin_user
+from app.auth.jwt import create_access_token, create_invite_token, decode_invite_token
+from app.core.config import settings
+from app.core.csrf import CSRF_COOKIE, verify_csrf_token
+from app.core.security import get_password_hash, verify_password
+from app.database import get_db
+from app.models.auth import RoleEnum, Tenant, User
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +143,7 @@ def login(request: Request, data: LoginRequest, db: Session = Depends(get_db)):
     if not user or not verify_password(data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
+    validate_active_account(user)
     access_token = create_access_token(
         user_id=str(user.id),
         role=user.role,
@@ -266,7 +273,7 @@ def get_tenants(db: Session = Depends(get_db), current_admin: User = Depends(get
 
 @router.put("/admin/tenants/{tenant_id}")
 def update_tenant(
-    tenant_id: str,
+    tenant_id: UUID,
     data: TenantUpdateByAdmin,
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_superadmin_user),
@@ -290,14 +297,19 @@ def update_tenant(
 
 @router.delete("/admin/tenants/{tenant_id}")
 def delete_tenant(
-    tenant_id: str,
+    tenant_id: UUID,
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_superadmin_user),
     _csrf: None = Depends(verify_csrf_token),
 ):
-    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).with_for_update().first()
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
+    from app.models.crm import Client
+    from app.models.properties import Property
+    if (db.query(Client.id).filter(Client.tenant_id == tenant_id).first()
+        or db.query(Property.id).filter(Property.tenant_id == tenant_id).first()):
+        raise HTTPException(409, "La agencia tiene historial comercial. Desactívala para conservar sus datos.")
     db.delete(tenant)
     db.commit()
     return {"message": "Tenant deleted"}
@@ -305,7 +317,7 @@ def delete_tenant(
 
 @router.get("/admin/tenants/{tenant_id}/users")
 def get_tenant_users_admin(
-    tenant_id: str,
+    tenant_id: UUID,
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_superadmin_user),
 ):
@@ -317,10 +329,10 @@ def get_tenant_users_admin(
 
 
 class UserInvite(BaseModel):
-    tenant_id: str
+    tenant_id: UUID
     email: EmailStr
     full_name: str
-    role: RoleEnum = RoleEnum.ADMIN
+    role: Literal[RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.AGENT] = RoleEnum.ADMIN
 
 
 @router.post("/admin/users/invite", status_code=status.HTTP_201_CREATED)
@@ -375,6 +387,12 @@ def accept_invite(data: AcceptInvite, db: Session = Depends(get_db)):
     except (JWTError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid or expired invite token")
 
+    invited_user = db.query(User).filter(User.email == email).first()
+    if not invited_user or not invited_user.tenant_id or invited_user.role == RoleEnum.SUPER_ADMIN:
+        raise HTTPException(400, "Invalid invite target")
+    tenant = db.query(Tenant).filter(Tenant.id == invited_user.tenant_id).with_for_update().first()
+    if not tenant or not tenant.is_active:
+        raise HTTPException(403, "La agencia está inactiva.")
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
     new_password_hash = get_password_hash(data.new_password)
 
@@ -423,7 +441,7 @@ def get_tenant_users(db: Session = Depends(get_db), current_user: User = Depends
 class TenantUserCreate(BaseModel):
     email: EmailStr
     full_name: str
-    role: RoleEnum = RoleEnum.AGENT
+    role: Literal[RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.AGENT] = RoleEnum.AGENT
     phone: Optional[str] = None
     license_number: Optional[str] = None
     commission_rate: Optional[float] = 0.0
@@ -437,6 +455,7 @@ def create_tenant_user(
     current_user: User = Depends(get_current_user),
     _csrf: None = Depends(verify_csrf_token),
 ):
+    lock_agency(db, current_user)
     if current_user.role not in [RoleEnum.ADMIN, RoleEnum.MANAGER]:
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
@@ -469,7 +488,7 @@ def create_tenant_user(
 
 class TenantUserUpdate(BaseModel):
     full_name: Optional[str] = None
-    role: Optional[RoleEnum] = None
+    role: Optional[Literal[RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.AGENT]] = None
     is_active: Optional[bool] = None
     phone: Optional[str] = None
     license_number: Optional[str] = None
@@ -479,12 +498,13 @@ class TenantUserUpdate(BaseModel):
 
 @router.put("/tenant/users/{user_id}")
 def update_tenant_user(
-    user_id: str,
+    user_id: UUID,
     data: TenantUserUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     _csrf: None = Depends(verify_csrf_token),
 ):
+    lock_agency(db, current_user)
     if current_user.role not in [RoleEnum.ADMIN, RoleEnum.MANAGER]:
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
@@ -492,6 +512,11 @@ def update_tenant_user(
     if not user:
         raise HTTPException(status_code=404, detail="Employee not found")
 
+    preserve_management(db, user,
+        role=data.role if data.role is not None else user.role,
+        active=data.is_active if data.is_active is not None else user.is_active)
+    if data.is_active is False:
+        user.invite_token_hash = None
     from datetime import date as date_type
     if data.full_name is not None:
         user.full_name = data.full_name
@@ -514,11 +539,12 @@ def update_tenant_user(
 
 @router.delete("/tenant/users/{user_id}")
 def delete_tenant_user(
-    user_id: str,
+    user_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     _csrf: None = Depends(verify_csrf_token),
 ):
+    lock_agency(db, current_user)
     if current_user.role not in [RoleEnum.ADMIN, RoleEnum.MANAGER]:
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
@@ -526,18 +552,21 @@ def delete_tenant_user(
     if not user:
         raise HTTPException(status_code=404, detail="Employee not found")
 
-    db.delete(user)
+    preserve_management(db, user, role=user.role, active=False)
+    user.is_active = False
+    user.invite_token_hash = None
     db.commit()
-    return {"message": "Employee deleted"}
+    return {"message": "Employee deactivated"}
 
 
 @router.post("/tenant/users/{user_id}/invite")
 def generate_user_invite(
-    user_id: str,
+    user_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     _csrf: None = Depends(verify_csrf_token),
 ):
+    lock_agency(db, current_user)
     if current_user.role not in [RoleEnum.ADMIN, RoleEnum.MANAGER]:
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
@@ -545,6 +574,8 @@ def generate_user_invite(
     if not user:
         raise HTTPException(status_code=404, detail="Employee not found")
 
+    if user.role == RoleEnum.SUPER_ADMIN:
+        raise HTTPException(403, "No se pueden gestionar superadministradores desde una agencia.")
     raw_token = secrets.token_urlsafe(32)
     user.invite_token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
     db.commit()

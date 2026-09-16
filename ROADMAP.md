@@ -77,6 +77,13 @@ Verificado con 130 pruebas backend, 36 de interfaz, compilación y revisión vis
 en Chrome con datos ficticios. No requiere migración. Ver
 [diccionario y validación de F0-04](docs/F0-04.md).
 
+**F0-05 implementada (16/09/2026):** permisos de agencia y asignación comprobados
+entre clientes, propiedades, visitas y ventas; referencias validadas también en
+calendario y coincidencias. Asignación masiva atómica, protección frente a elevación
+de roles y bajas que conservan el historial económico. Incluye inventario de
+referencias antiguas entre agencias y pruebas con PostgreSQL aislado.
+No requiere migración. Ver [reglas y validación de F0-05](docs/F0-05.md).
+
 Trabajo de producto asociado: observar el flujo de una captación, una visita y un cierre en las agencias piloto; acordar un glosario de estados y registrar una línea base de seguimiento. Inventariar los datos existentes antes de modificar el modelo.
 
 **Puerta de salida:** completar el recorrido inmueble → cliente → visita → venta → comisión sin inconsistencias. Acordar el canal de entrada y el portal prioritarios para los pilotos, y comprobar la disponibilidad de integración.

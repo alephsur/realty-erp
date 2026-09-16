@@ -31,9 +31,9 @@ interface VisitStats {
   no_show: number;
 }
 
-interface PropertyOption { id: string; title: string; }
-interface ClientOption { id: string; full_name: string; }
-interface AgentOption { id: string; full_name: string; }
+interface PropertyOption { id: string; title: string; agent_id: string | null; }
+interface ClientOption { id: string; full_name: string; agent_id: string | null; }
+interface AgentOption { id: string; full_name: string; role: string; }
 
 const VISIT_STATUSES = [
   { key: 'SCHEDULED', label: 'Programada', color: 'bg-blue-100 text-blue-800', icon: Clock },
@@ -68,6 +68,10 @@ export default function Visits() {
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
 
+  const assignedAgent = agents.find(agent => agent.id === form.agent_id);
+  const visibleProperties = assignedAgent?.role === 'AGENT' ? properties.filter(prop => prop.agent_id === assignedAgent.id) : properties;
+  const visibleClients = assignedAgent?.role === 'AGENT' ? clients.filter(buyer => buyer.agent_id === assignedAgent.id) : clients;
+
   // Feedback modal
   const [feedbackVisit, setFeedbackVisit] = useState<VisitData | null>(null);
   const [feedbackText, setFeedbackText] = useState('');
@@ -92,13 +96,13 @@ export default function Visits() {
     const [statsRes, propsRes, clientsRes, agentsRes] = await Promise.all([
       client.get('/visits/stats'),
       isAgent ? client.get('/properties/my') : client.get('/properties', { params: { limit: 200 } }),
-      client.get('/clients', { params: { limit: 200 } }).catch(() => ({ data: { items: [] } })),
+      client.get('/clients', { params: { limit: 200, client_type: 'Demandante' } }).catch(() => ({ data: { items: [] } })),
       isAgent ? Promise.resolve({ data: [] }) : client.get('/auth/tenant/users').catch(() => ({ data: [] })),
     ]);
     setStats(statsRes.data);
-    setProperties((propsRes.data.items ?? propsRes.data).map((p: any) => ({ id: p.id, title: p.title })));
-    setClients((clientsRes.data.items ?? clientsRes.data).map((c: any) => ({ id: c.id, full_name: c.full_name })));
-    setAgents(agentsRes.data.map((u: any) => ({ id: u.id, full_name: u.full_name })));
+    setProperties((propsRes.data.items ?? propsRes.data).map((p: any) => ({ id: p.id, title: p.title, agent_id: p.agent_id })));
+    setClients((clientsRes.data.items ?? clientsRes.data).map((c: any) => ({ id: c.id, full_name: c.full_name, agent_id: c.agent_id })));
+    setAgents(agentsRes.data.filter((u: any) => u.is_active).map((u: any) => ({ id: u.id, full_name: u.full_name, role: u.role })));
   };
 
   // Debounce search
@@ -218,26 +222,26 @@ export default function Visits() {
           </div>
           {error && <div className="mb-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg">{error}</div>}
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Propiedad *</label>
-                <select required value={form.property_id} onChange={e => setForm({...form, property_id: e.target.value})} className={inputCls}>
-                  <option value="">Seleccionar propiedad...</option>
-                  {properties.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
-                </select></div>
-              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Cliente</label>
-                <select value={form.client_id} onChange={e => setForm({...form, client_id: e.target.value})} className={inputCls}>
-                  <option value="">— Sin cliente —</option>
-                  {clients.map(c => <option key={c.id} value={c.id}>{c.full_name}</option>)}
-                </select></div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {isManager && (
                 <div><label className="block text-sm font-semibold text-slate-700 mb-1">Agente</label>
-                  <select value={form.agent_id} onChange={e => setForm({...form, agent_id: e.target.value})} className={inputCls}>
+                  <select value={form.agent_id} onChange={e => setForm({...form, agent_id: e.target.value, property_id: '', client_id: ''})} className={inputCls}>
                     <option value="">— Sin Agente —</option>
                     {agents.map(a => <option key={a.id} value={a.id}>{a.full_name}</option>)}
                   </select></div>
               )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Propiedad *</label>
+                <select required value={form.property_id} onChange={e => setForm({...form, property_id: e.target.value})} className={inputCls}>
+                  <option value="">Seleccionar propiedad...</option>
+                  {visibleProperties.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
+                </select></div>
+              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Cliente</label>
+                <select value={form.client_id} onChange={e => setForm({...form, client_id: e.target.value})} className={inputCls}>
+                  <option value="">— Sin cliente —</option>
+                  {visibleClients.map(c => <option key={c.id} value={c.id}>{c.full_name}</option>)}
+                </select></div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div><label className="block text-sm font-semibold text-slate-700 mb-1">Fecha y Hora *</label>
                 <input type="datetime-local" required value={form.scheduled_at} onChange={e => setForm({...form, scheduled_at: e.target.value})} className={inputCls} /></div>
               <div><label className="block text-sm font-semibold text-slate-700 mb-1">Duración (min)</label>

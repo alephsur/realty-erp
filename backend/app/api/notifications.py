@@ -1,16 +1,18 @@
 from datetime import datetime, timezone
 from typing import List
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user
+from app.core.csrf import verify_csrf_token
 from app.database import get_db
-from app.models.auth import User, RoleEnum
+from app.models.auth import RoleEnum, User
 from app.models.notifications import Notification
 from app.schemas.notification import NotificationRead
 
-router = APIRouter(prefix="/notifications", tags=["notifications"])
+router = APIRouter(prefix="/notifications", tags=["notifications"], dependencies=[Depends(verify_csrf_token)])
 
 
 # ==========================================
@@ -28,6 +30,8 @@ def push(
     entity_type: str | None = None,
     entity_id: str | None = None,
 ) -> None:
+    if not db.query(User.id).filter(User.id == user_id, User.tenant_id == tenant_id, User.is_active.is_(True)).first():
+        return
     db.add(
         Notification(
             tenant_id=tenant_id,
@@ -85,7 +89,7 @@ def list_notifications(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = db.query(Notification).filter(Notification.user_id == current_user.id)
+    query = db.query(Notification).filter(Notification.tenant_id == current_user.tenant_id, Notification.user_id == current_user.id)
     if unread_only:
         query = query.filter(Notification.read_at == None)
     return query.order_by(Notification.created_at.desc()).limit(limit).all()
@@ -99,7 +103,7 @@ def unread_count(
     count = (
         db.query(Notification)
         .filter(
-            Notification.user_id == current_user.id,
+            Notification.tenant_id == current_user.tenant_id, Notification.user_id == current_user.id,
             Notification.read_at == None,
         )
         .count()
@@ -109,13 +113,13 @@ def unread_count(
 
 @router.put("/{notification_id}/read")
 def mark_read(
-    notification_id: str,
+    notification_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     n = (
         db.query(Notification)
-        .filter(Notification.id == notification_id, Notification.user_id == current_user.id)
+        .filter(Notification.id == notification_id, Notification.tenant_id == current_user.tenant_id, Notification.user_id == current_user.id)
         .first()
     )
     if not n:
@@ -131,7 +135,7 @@ def mark_all_read(
     current_user: User = Depends(get_current_user),
 ):
     db.query(Notification).filter(
-        Notification.user_id == current_user.id,
+        Notification.tenant_id == current_user.tenant_id, Notification.user_id == current_user.id,
         Notification.read_at == None,
     ).update({"read_at": datetime.now(timezone.utc)})
     db.commit()

@@ -1,21 +1,25 @@
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import List, Optional
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
-from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel
-from typing import Optional, List
-from datetime import datetime, timedelta, timezone
-import logging
+from sqlalchemy.orm import Session, joinedload
 
+from app.api.dependencies import get_agency_user as get_current_user
+from app.core.csrf import verify_csrf_token
 from app.database import get_db
-from app.models.auth import User, RoleEnum
-from app.models.visits import Visit, VisitStatus
 from app.models.appointments import Appointment, AppointmentType
-from app.api.dependencies import get_current_user
+from app.models.auth import RoleEnum, User
+from app.models.visits import Visit, VisitStatus
 from app.schemas import AppointmentRead
+from app.services.access import assignee, lock_agency, visit_query
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/calendar", tags=["calendar"])
+router = APIRouter(prefix="/calendar", tags=["calendar"], dependencies=[Depends(verify_csrf_token)])
 
 APPOINTMENT_TYPE_LABELS = {
     "VISIT": "Visita",
@@ -32,7 +36,7 @@ APPOINTMENT_TYPE_LABELS = {
 class AppointmentCreate(BaseModel):
     title: str
     appointment_type: AppointmentType = AppointmentType.MEETING
-    agent_id: Optional[str] = None
+    agent_id: Optional[UUID] = None
     start_at: str
     end_at: str
     description: Optional[str] = None
@@ -64,16 +68,17 @@ def _visit_options_calendar():
 
 def _get_conflicts(
     db: Session,
-    agent_id: str,
+    agent_id: UUID,
     tenant_id,
     start_at: datetime,
     end_at: datetime,
-    exclude_appointment_id: Optional[str] = None,
+    current_user: User,
+    exclude_appointment_id: Optional[UUID] = None,
 ) -> List[dict]:
     conflicts = []
 
     visits = (
-        db.query(Visit)
+        visit_query(db, current_user)
         .options(joinedload(Visit.property))
         .filter(
             Visit.tenant_id == tenant_id,
@@ -218,7 +223,7 @@ def get_calendar_agents(
 def get_calendar_events(
     start: str = Query(..., description="ISO datetime range start"),
     end: str = Query(..., description="ISO datetime range end"),
-    agent_id: Optional[str] = Query(None),
+    agent_id: Optional[UUID] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -237,7 +242,7 @@ def get_calendar_events(
 
     # --- Visits ---
     visit_q = (
-        db.query(Visit)
+        visit_query(db, current_user)
         .options(*_visit_options_calendar())
         .filter(
             Visit.tenant_id == tid,
@@ -322,7 +327,7 @@ def get_calendar_events(
 def export_ical(
     start: str = Query(...),
     end: str = Query(...),
-    agent_id: Optional[str] = Query(None),
+    agent_id: Optional[UUID] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -354,14 +359,14 @@ def create_appointment(
     if end_dt <= start_dt:
         raise HTTPException(status_code=400, detail="end_at must be after start_at")
 
-    effective_agent_id = data.agent_id
-    if current_user.role == RoleEnum.AGENT:
-        effective_agent_id = str(current_user.id)
+    lock_agency(db, current_user)
+    agent = assignee(db, current_user, data.agent_id, default_self=True)
+    effective_agent_id = agent.id if agent else None
 
     conflicts = []
     if effective_agent_id:
         conflicts = _get_conflicts(
-            db, effective_agent_id, current_user.tenant_id, start_dt, end_dt
+            db, effective_agent_id, current_user.tenant_id, start_dt, end_dt, current_user
         )
 
     appt = Appointment(
@@ -389,11 +394,12 @@ def create_appointment(
 
 @router.put("/appointments/{appointment_id}")
 def update_appointment(
-    appointment_id: str,
+    appointment_id: UUID,
     data: AppointmentUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    lock_agency(db, current_user)
     appt = db.query(Appointment).filter(
         Appointment.id == appointment_id,
         Appointment.tenant_id == current_user.tenant_id,
@@ -419,7 +425,7 @@ def update_appointment(
     conflicts = []
     if agent_id:
         conflicts = _get_conflicts(
-            db, agent_id, current_user.tenant_id, start_dt, end_dt,
+            db, agent_id, current_user.tenant_id, start_dt, end_dt, current_user,
             exclude_appointment_id=appointment_id,
         )
 
@@ -428,10 +434,11 @@ def update_appointment(
 
 @router.delete("/appointments/{appointment_id}")
 def delete_appointment(
-    appointment_id: str,
+    appointment_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    lock_agency(db, current_user)
     appt = db.query(Appointment).filter(
         Appointment.id == appointment_id,
         Appointment.tenant_id == current_user.tenant_id,
@@ -449,7 +456,7 @@ def delete_appointment(
 
 @router.get("/appointments/{appointment_id}", response_model=AppointmentRead)
 def get_appointment(
-    appointment_id: str,
+    appointment_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

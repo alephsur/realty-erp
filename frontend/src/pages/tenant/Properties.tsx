@@ -131,7 +131,7 @@ export default function Properties() {
   const fetchAgents = async () => {
     try {
       const r = await client.get('/auth/tenant/users');
-      setAgents(r.data.map((u: any) => ({ id: u.id, full_name: u.full_name })));
+      setAgents(r.data.filter((u: any) => u.is_active && ['ADMIN', 'MANAGER', 'AGENT'].includes(u.role)).map((u: any) => ({ id: u.id, full_name: u.full_name })));
     } catch (err) { console.error(err); }
   };
 
@@ -333,6 +333,9 @@ export default function Properties() {
               <div><label className="block text-sm font-semibold text-slate-700 mb-1">Agente Asignado</label>
                 <select value={form.agent_id} onChange={e => setForm({...form, agent_id: e.target.value})} className={inputCls}>
                   <option value="">— Sin Agente —</option>
+                  {editingId && form.agent_id && !agents.some(a => a.id === form.agent_id) && (
+                    <option value={form.agent_id} disabled>Agente actual inactivo (conservar asignación)</option>
+                  )}
                   {agents.map(a => <option key={a.id} value={a.id}>{a.full_name}</option>)}</select></div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

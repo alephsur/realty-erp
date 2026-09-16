@@ -114,6 +114,8 @@ Correcciones, reaperturas y ajustes de comisión: [F0-03](docs/F0-03.md).
 
 Definiciones, periodos y cálculos de indicadores: [F0-04](docs/F0-04.md).
 
+Permisos, referencias, reasignaciones y bajas con historial: [F0-05](docs/F0-05.md).
+
 ---
 
 ### Comisiones (`/commissions`)

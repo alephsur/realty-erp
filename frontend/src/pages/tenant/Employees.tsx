@@ -94,7 +94,7 @@ export default function Employees() {
   };
 
   const handleDelete = async (userId: string) => {
-    if (!confirm('¿Estás seguro de que deseas eliminar este empleado?')) return;
+    if (!confirm('¿Desactivar este empleado? Perderá el acceso y se conservarán sus asignaciones, ventas y comisiones.')) return;
     try {
       await client.delete(`/auth/tenant/users/${userId}`);
       fetchEmployees();
@@ -269,7 +269,7 @@ export default function Employees() {
                       {/* Status */}
                       <td className="px-4 py-4 whitespace-nowrap">
                         <span className={`px-2 py-0.5 inline-flex text-xs font-semibold rounded-full ${person.is_active ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
-                          {person.is_active ? 'Activo' : 'Pendiente'}
+                          {person.is_active ? 'Activo' : 'Inactivo'}
                         </span>
                         {inviteLinks[person.id] && (
                           <button onClick={() => handleCopyLink(inviteLinks[person.id])} className="mt-1 block text-xs text-indigo-600 hover:text-indigo-800 flex items-center gap-1">
@@ -288,8 +288,8 @@ export default function Employees() {
                           ) : (
                             <>
                               <button onClick={() => startEdit(person)} className="text-slate-400 hover:text-indigo-600 p-1.5 rounded-lg hover:bg-indigo-50" title="Editar"><Edit className="w-4 h-4" /></button>
-                              <button onClick={() => handleGenerateInvite(person.id)} className="text-slate-400 hover:text-emerald-600 p-1.5 rounded-lg hover:bg-emerald-50" title="Enviar Invitación"><Send className="w-4 h-4" /></button>
-                              <button onClick={() => handleDelete(person.id)} className="text-slate-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50" title="Eliminar"><Trash2 className="w-4 h-4" /></button>
+                              <button onClick={() => handleGenerateInvite(person.id)} className="text-slate-400 hover:text-emerald-600 p-1.5 rounded-lg hover:bg-emerald-50" title="Invitar o reactivar"><Send className="w-4 h-4" /></button>
+                              <button onClick={() => handleDelete(person.id)} className="text-slate-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50" title="Desactivar"><Trash2 className="w-4 h-4" /></button>
                             </>
                           )}
                         </div>

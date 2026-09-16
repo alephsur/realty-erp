@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Edit, Trash2, X, User, Phone, Mail, MapPin, Home, Building } from 'lucide-react';
+import { Plus, Search, Edit, Archive, RotateCcw, X, User, Phone, Mail, MapPin, Home, Building } from 'lucide-react';
 import client from '../../api/client';
 import { useAuth } from '../../hooks/useAuth';
 import Pagination from '../../components/Pagination';
@@ -75,6 +75,7 @@ export default function Clients() {
   const [saving, setSaving] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('ALL');
+  const [includeInactive, setIncludeInactive] = useState(false);
 
   // Detail view
   const [selectedClient, setSelectedClient] = useState<ClientData | null>(null);
@@ -87,7 +88,7 @@ export default function Clients() {
   const fetchClients = async (p = page, search = searchQuery, type = typeFilter) => {
     try {
       setLoading(true);
-      const params: Record<string, any> = { page: p, limit: LIMIT };
+      const params: Record<string, any> = { page: p, limit: LIMIT, include_inactive: includeInactive };
       if (search) params.search = search;
       if (type !== 'ALL') params.client_type = type === 'OWNER' ? 'Propietario' : 'Demandante';
       const r = await client.get('/clients', { params });
@@ -101,25 +102,20 @@ export default function Clients() {
   const fetchAgents = async () => {
     try {
       const r = await client.get('/auth/tenant/users');
-      setAgents(r.data.map((u: any) => ({ id: u.id, full_name: u.full_name })));
+      setAgents(r.data.filter((u: any) => u.is_active && ['ADMIN', 'MANAGER', 'AGENT'].includes(u.role)).map((u: any) => ({ id: u.id, full_name: u.full_name })));
     } catch { /* ignore */ }
   };
 
-  // Debounce search
+  // Cancel pending searches when any filter changes.
   useEffect(() => {
     const timer = setTimeout(() => {
-      setPage(1);
-      fetchClients(1, searchQuery, typeFilter);
+      fetchClients(page, searchQuery, typeFilter);
     }, 300);
     return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [page, searchQuery, typeFilter, includeInactive]);
 
   useEffect(() => {
-    fetchClients(page, searchQuery, typeFilter);
-  }, [page, typeFilter]);
-
-  useEffect(() => {
-    fetchAgents();
+    if (isManager) fetchAgents();
   }, []);
 
   const openCreate = () => { setForm(emptyForm); setEditingId(null); setShowForm(true); setError(''); };
@@ -141,7 +137,7 @@ export default function Clients() {
     setError(''); setSaving(true);
     const payload = {
       first_name: form.first_name, last_name: form.last_name, email: form.email || null,
-      phone: form.phone || null, client_type: form.client_type, agent_id: form.agent_id || null,
+      phone: form.phone || null, client_type: form.client_type, ...(isManager ? { agent_id: form.agent_id || null } : {}),
       dni: form.dni || null, address: form.address || null,
       budget_min: form.budget_min ? parseFloat(form.budget_min) : null,
       budget_max: form.budget_max ? parseFloat(form.budget_max) : null,
@@ -158,12 +154,19 @@ export default function Clients() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('¿Eliminar este cliente?')) return;
+    if (!confirm('¿Archivar este cliente? Se conservarán sus visitas, ventas e historial.')) return;
     try {
       await client.delete(`/clients/${id}`);
       fetchClients(page, searchQuery, typeFilter);
       if (selectedClient?.id === id) setSelectedClient(null);
     } catch (err: any) { alert(err.response?.data?.detail || 'Error'); }
+  };
+
+  const handleRestore = async (id: string) => {
+    try {
+      await client.put(`/clients/${id}`, { is_active: true });
+      fetchClients(page, searchQuery, typeFilter);
+    } catch (err: any) { alert(err.response?.data?.detail || 'No se pudo restaurar el cliente'); }
   };
 
   const openMatchModal = async (c: ClientData) => {
@@ -222,6 +225,9 @@ export default function Clients() {
                 <div><label className="block text-sm font-semibold text-slate-700 mb-1">Agente Asignado</label>
                   <select value={form.agent_id} onChange={e => setForm({...form, agent_id: e.target.value})} className={inputCls}>
                     <option value="">— Sin Agente —</option>
+                    {editingId && form.agent_id && !agents.some(a => a.id === form.agent_id) && (
+                      <option value={form.agent_id} disabled>Agente actual inactivo (conservar asignación)</option>
+                    )}
                     {agents.map(a => <option key={a.id} value={a.id}>{a.full_name}</option>)}
                   </select></div>
               )}
@@ -307,6 +313,11 @@ export default function Clients() {
         </div>
       )}
 
+      <label className="flex items-center gap-2 text-sm text-slate-600">
+        <input type="checkbox" checked={includeInactive} onChange={e => { setIncludeInactive(e.target.checked); setPage(1); }} />
+        Incluir clientes archivados
+      </label>
+
       {/* Type Filter Pills */}
       <div className="flex flex-wrap gap-2">
         <button onClick={() => { setTypeFilter('ALL'); setPage(1); }}
@@ -329,7 +340,7 @@ export default function Clients() {
           <div className="relative w-full max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
             <input type="text" placeholder="Buscar clientes..." value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
+              onChange={e => { setSearchQuery(e.target.value); setPage(1); }}
               className="w-full pl-10 pr-4 py-2 border-0 ring-1 ring-inset ring-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-inset focus:ring-indigo-600 bg-white" />
           </div>
         </div>
@@ -389,18 +400,24 @@ export default function Clients() {
                     <td className="px-4 py-4 text-right" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-end space-x-1">
                         {/* Match button for buyers */}
-                        {c.client_type_key === 'BUYER' && (
+                        {c.is_active && c.client_type_key === 'BUYER' && (
                           <button onClick={() => openMatchModal(c)}
                             className="text-slate-400 hover:text-purple-600 p-1.5 rounded-lg hover:bg-purple-50" title="Propiedades compatibles">
                             <Home className="w-4 h-4" />
                           </button>
                         )}
+                        {!c.is_active && <span className="text-xs text-slate-500">Archivado</span>}
+                        {isManager && !c.is_active && (
+                          <button onClick={() => handleRestore(c.id)} className="text-indigo-600 p-1.5 rounded-lg hover:bg-indigo-50" title="Restaurar cliente">
+                            <RotateCcw className="w-4 h-4" />
+                          </button>
+                        )}
                         <button onClick={() => openEdit(c)} className="text-slate-400 hover:text-indigo-600 p-1.5 rounded-lg hover:bg-indigo-50" title="Editar">
                           <Edit className="w-4 h-4" />
                         </button>
-                        {isManager && (
-                          <button onClick={() => handleDelete(c.id)} className="text-slate-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50" title="Eliminar">
-                            <Trash2 className="w-4 h-4" />
+                        {isManager && c.is_active && (
+                          <button onClick={() => handleDelete(c.id)} className="text-slate-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50" title="Archivar">
+                            <Archive className="w-4 h-4" />
                           </button>
                         )}
                       </div>
