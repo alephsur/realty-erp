@@ -29,6 +29,8 @@ function UserMenu({ onChangePassword, onLogout, displayName, role }: {
   return (
     <div ref={ref} className="relative">
       <button
+        aria-label="Menú de usuario"
+        aria-expanded={open}
         onClick={() => setOpen(o => !o)}
         className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 transition-colors"
       >

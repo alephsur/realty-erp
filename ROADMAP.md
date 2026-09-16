@@ -50,7 +50,7 @@ documentadas en el [README](README.md#instalación-de-desarrollo-reproducible-f0
 Verificados el arranque de la API, registro e inicio de sesión con datos de prueba,
 las diez migraciones desde una base PostgreSQL 15 vacía y su repetición sin cambios.
 Incluye dos pruebas de configuración y arranque; la cobertura comercial de F0-06
-sigue pendiente. Las comprobaciones usaron bases aisladas, sin modificar datos existentes.
+se incorpora en F0-06. Las comprobaciones usaron bases aisladas, sin modificar datos existentes.
 
 **F0-02 implementada (15/09/2026):** formulario y operación de cierre comunes desde
 Propiedades, tablero y Ventas; comprador, precio, agente y comisiones obligatorios;
@@ -83,6 +83,14 @@ calendario y coincidencias. Asignación masiva atómica, protección frente a el
 de roles y bajas que conservan el historial económico. Incluye inventario de
 referencias antiguas entre agencias y pruebas con PostgreSQL aislado.
 No requiere migración. Ver [reglas y validación de F0-05](docs/F0-05.md).
+
+**F0-06 implementada (16/09/2026):** cinco recorridos en Chromium con
+API y PostgreSQL desechables; acceso, captación, demandante, visita, cierre desde
+las tres entradas, comisión y revisión de venta. Workflow de comprobaciones con
+estado final `Delivery gate`; una prueba fallida u omitida invalida el resultado.
+El workflow se incluye en el repositorio; los resultados remotos se consultan en
+Actions. Exigir el control para fusionar requiere proteger la rama `main`.
+Ver [cobertura, ejecución y activación de F0-06](docs/F0-06.md).
 
 Trabajo de producto asociado: observar el flujo de una captación, una visita y un cierre en las agencias piloto; acordar un glosario de estados y registrar una línea base de seguimiento. Inventariar los datos existentes antes de modificar el modelo.
 

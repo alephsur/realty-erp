@@ -223,27 +223,27 @@ export default function Visits() {
           {error && <div className="mb-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg">{error}</div>}
           <form onSubmit={handleSubmit} className="space-y-4">
               {isManager && (
-                <div><label className="block text-sm font-semibold text-slate-700 mb-1">Agente</label>
-                  <select value={form.agent_id} onChange={e => setForm({...form, agent_id: e.target.value, property_id: '', client_id: ''})} className={inputCls}>
+                <div><label htmlFor="visits-agent-id" className="block text-sm font-semibold text-slate-700 mb-1">Agente</label>
+                  <select id="visits-agent-id" value={form.agent_id} onChange={e => setForm({...form, agent_id: e.target.value, property_id: '', client_id: ''})} className={inputCls}>
                     <option value="">— Sin Agente —</option>
                     {agents.map(a => <option key={a.id} value={a.id}>{a.full_name}</option>)}
                   </select></div>
               )}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Propiedad *</label>
-                <select required value={form.property_id} onChange={e => setForm({...form, property_id: e.target.value})} className={inputCls}>
+              <div><label htmlFor="visits-property-id" className="block text-sm font-semibold text-slate-700 mb-1">Propiedad *</label>
+                <select id="visits-property-id" required value={form.property_id} onChange={e => setForm({...form, property_id: e.target.value})} className={inputCls}>
                   <option value="">Seleccionar propiedad...</option>
                   {visibleProperties.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
                 </select></div>
-              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Cliente</label>
-                <select value={form.client_id} onChange={e => setForm({...form, client_id: e.target.value})} className={inputCls}>
+              <div><label htmlFor="visits-client-id" className="block text-sm font-semibold text-slate-700 mb-1">Cliente</label>
+                <select id="visits-client-id" value={form.client_id} onChange={e => setForm({...form, client_id: e.target.value})} className={inputCls}>
                   <option value="">— Sin cliente —</option>
                   {visibleClients.map(c => <option key={c.id} value={c.id}>{c.full_name}</option>)}
                 </select></div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Fecha y Hora *</label>
-                <input type="datetime-local" required value={form.scheduled_at} onChange={e => setForm({...form, scheduled_at: e.target.value})} className={inputCls} /></div>
+              <div><label htmlFor="visits-scheduled-at" className="block text-sm font-semibold text-slate-700 mb-1">Fecha y Hora *</label>
+                <input id="visits-scheduled-at" type="datetime-local" required value={form.scheduled_at} onChange={e => setForm({...form, scheduled_at: e.target.value})} className={inputCls} /></div>
               <div><label className="block text-sm font-semibold text-slate-700 mb-1">Duración (min)</label>
                 <input type="number" min="15" step="15" value={form.duration_minutes} onChange={e => setForm({...form, duration_minutes: e.target.value})} className={inputCls} /></div>
             </div>

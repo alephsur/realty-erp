@@ -297,8 +297,8 @@ export default function Properties() {
           {error && <div className="mb-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg">{error}</div>}
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Título *</label>
-                <input required value={form.title} onChange={e => setForm({...form, title: e.target.value})} className={inputCls} /></div>
+              <div><label htmlFor="properties-title" className="block text-sm font-semibold text-slate-700 mb-1">Título *</label>
+                <input id="properties-title" required value={form.title} onChange={e => setForm({...form, title: e.target.value})} className={inputCls} /></div>
               <div><label className="block text-sm font-semibold text-slate-700 mb-1">Referencia</label>
                 <input value={form.reference} onChange={e => setForm({...form, reference: e.target.value})} className={inputCls} placeholder="INM-2024-001" /></div>
               <div><label className="block text-sm font-semibold text-slate-700 mb-1">Tipo</label>
@@ -306,8 +306,8 @@ export default function Properties() {
                   {PROPERTY_TYPES.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}</select></div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Precio (€) *</label>
-                <input type="number" required step="0.01" value={form.price} onChange={e => setForm({...form, price: e.target.value})} className={inputCls} /></div>
+              <div><label htmlFor="properties-price" className="block text-sm font-semibold text-slate-700 mb-1">Precio (€) *</label>
+                <input id="properties-price" type="number" required step="0.01" value={form.price} onChange={e => setForm({...form, price: e.target.value})} className={inputCls} /></div>
               <div><label className="block text-sm font-semibold text-slate-700 mb-1">Habitaciones</label>
                 <input type="number" min="0" value={form.bedrooms} onChange={e => setForm({...form, bedrooms: e.target.value})} className={inputCls} /></div>
               <div><label className="block text-sm font-semibold text-slate-700 mb-1">Baños</label>
@@ -316,8 +316,8 @@ export default function Properties() {
                 <input type="number" step="0.1" value={form.sqm} onChange={e => setForm({...form, sqm: e.target.value})} className={inputCls} /></div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Dirección *</label>
-                <input required value={form.address} onChange={e => setForm({...form, address: e.target.value})} className={inputCls} /></div>
+              <div><label htmlFor="properties-address" className="block text-sm font-semibold text-slate-700 mb-1">Dirección *</label>
+                <input id="properties-address" required value={form.address} onChange={e => setForm({...form, address: e.target.value})} className={inputCls} /></div>
               <div><label className="block text-sm font-semibold text-slate-700 mb-1">Ciudad</label>
                 <input value={form.city} onChange={e => setForm({...form, city: e.target.value})} className={inputCls} /></div>
               <div><label className="block text-sm font-semibold text-slate-700 mb-1">Código Postal</label>
@@ -328,10 +328,10 @@ export default function Properties() {
                 <input value={form.owner_name} onChange={e => setForm({...form, owner_name: e.target.value})} className={inputCls} /></div>
               <div><label className="block text-sm font-semibold text-slate-700 mb-1">Teléfono del Propietario</label>
                 <input value={form.owner_phone} onChange={e => setForm({...form, owner_phone: e.target.value})} className={inputCls} /></div>
-              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Comisión Propietario %</label>
-                <input type="number" step="0.1" min="0" value={form.commission_rate} onChange={e => setForm({...form, commission_rate: e.target.value})} className={inputCls} /></div>
-              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Agente Asignado</label>
-                <select value={form.agent_id} onChange={e => setForm({...form, agent_id: e.target.value})} className={inputCls}>
+              <div><label htmlFor="properties-commission-rate" className="block text-sm font-semibold text-slate-700 mb-1">Comisión Propietario %</label>
+                <input id="properties-commission-rate" type="number" step="0.1" min="0" value={form.commission_rate} onChange={e => setForm({...form, commission_rate: e.target.value})} className={inputCls} /></div>
+              <div><label htmlFor="properties-agent-id" className="block text-sm font-semibold text-slate-700 mb-1">Agente Asignado</label>
+                <select id="properties-agent-id" value={form.agent_id} onChange={e => setForm({...form, agent_id: e.target.value})} className={inputCls}>
                   <option value="">— Sin Agente —</option>
                   {editingId && form.agent_id && !agents.some(a => a.id === form.agent_id) && (
                     <option value={form.agent_id} disabled>Agente actual inactivo (conservar asignación)</option>

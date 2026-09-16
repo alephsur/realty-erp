@@ -205,12 +205,12 @@ export default function Clients() {
           {error && <div className="mb-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg">{error}</div>}
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Nombre *</label>
-                <input required value={form.first_name} onChange={e => setForm({...form, first_name: e.target.value})} className={inputCls} /></div>
-              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Apellidos *</label>
-                <input required value={form.last_name} onChange={e => setForm({...form, last_name: e.target.value})} className={inputCls} /></div>
-              <div><label className="block text-sm font-semibold text-slate-700 mb-1">Tipo *</label>
-                <select value={form.client_type} onChange={e => setForm({...form, client_type: e.target.value})} className={inputCls + " font-medium"}>
+              <div><label htmlFor="clients-first-name" className="block text-sm font-semibold text-slate-700 mb-1">Nombre *</label>
+                <input id="clients-first-name" required value={form.first_name} onChange={e => setForm({...form, first_name: e.target.value})} className={inputCls} /></div>
+              <div><label htmlFor="clients-last-name" className="block text-sm font-semibold text-slate-700 mb-1">Apellidos *</label>
+                <input id="clients-last-name" required value={form.last_name} onChange={e => setForm({...form, last_name: e.target.value})} className={inputCls} /></div>
+              <div><label htmlFor="clients-client-type" className="block text-sm font-semibold text-slate-700 mb-1">Tipo *</label>
+                <select id="clients-client-type" value={form.client_type} onChange={e => setForm({...form, client_type: e.target.value})} className={inputCls + " font-medium"}>
                   {CLIENT_TYPES.map(t => <option key={t.key} value={t.value}>{t.label}</option>)}
                 </select></div>
             </div>
@@ -222,8 +222,8 @@ export default function Clients() {
               <div><label className="block text-sm font-semibold text-slate-700 mb-1">DNI / NIE</label>
                 <input value={form.dni} onChange={e => setForm({...form, dni: e.target.value})} className={inputCls} /></div>
               {isManager && (
-                <div><label className="block text-sm font-semibold text-slate-700 mb-1">Agente Asignado</label>
-                  <select value={form.agent_id} onChange={e => setForm({...form, agent_id: e.target.value})} className={inputCls}>
+                <div><label htmlFor="clients-agent-id" className="block text-sm font-semibold text-slate-700 mb-1">Agente Asignado</label>
+                  <select id="clients-agent-id" value={form.agent_id} onChange={e => setForm({...form, agent_id: e.target.value})} className={inputCls}>
                     <option value="">— Sin Agente —</option>
                     {editingId && form.agent_id && !agents.some(a => a.id === form.agent_id) && (
                       <option value={form.agent_id} disabled>Agente actual inactivo (conservar asignación)</option>

@@ -116,6 +116,8 @@ Definiciones, periodos y cálculos de indicadores: [F0-04](docs/F0-04.md).
 
 Permisos, referencias, reasignaciones y bajas con historial: [F0-05](docs/F0-05.md).
 
+Pruebas del flujo completo y control automático de entrega: [F0-06](docs/F0-06.md).
+
 ---
 
 ### Comisiones (`/commissions`)
@@ -303,12 +305,31 @@ uv run --locked alembic current
 Las pruebas de F0-01 verifican la carga de `.env`, la prioridad de las variables del
 proceso y el arranque de la API y su esquema OpenAPI. Se ejecutan con configuración
 temporal y no acceden a la base de datos del desarrollador. Las pruebas completas
-del flujo comercial corresponden a F0-06.
+del flujo comercial se describen en [F0-06](docs/F0-06.md).
 
 Las pruebas de cierre de F0-02 se ejecutan con
 `RUN_POSTGRES_TESTS=1 uv run --locked pytest` desde `backend/`; crean y eliminan su
 propio contenedor PostgreSQL. Sin esa variable se omiten las pruebas que requieren
 PostgreSQL. El frontend incorpora `npm test` para los cálculos y el formulario.
+
+### Comprobación del recorrido comercial (F0-06)
+
+```bash
+# Desde frontend/, con Docker disponible:
+npm ci
+npx --no-install playwright install --with-deps chromium
+npm run test:e2e
+```
+
+Crea su propia base PostgreSQL, API y compilación temporal; no utiliza los datos ni
+los servicios de la instalación. Comprueba acceso, cliente y propiedad, visita,
+las tres entradas de cierre, comisión, corrección y reapertura. Los resultados y
+los diagnósticos se guardan en `frontend/e2e-artifacts/`.
+
+GitHub Actions incorpora las suites backend/interfaz, la compilación y los
+recorridos del navegador. El estado **Delivery gate** solo aprueba si todos pasan;
+para impedir fusiones debe configurarse como obligatorio en la protección de
+`main`. Ver [ejecución, cobertura y activación remota](docs/F0-06.md).
 
 Para verificar las migraciones desde cero sin utilizar los datos habituales,
 arranca un proyecto Compose independiente, desde la raíz:
